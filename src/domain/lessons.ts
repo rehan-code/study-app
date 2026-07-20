@@ -31,3 +31,33 @@ export function compareLessons(a: Lesson, b: Lesson): number {
   }
   return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
 }
+
+/** Lookup key so "lesson 7" and " Lesson 7" resolve to the same lesson across scans. */
+export function lessonNameKey(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+/**
+ * Names from `referencedNames` with no lesson in `existingNames` yet, deduped
+ * by lessonNameKey, trimmed, in first-appearance order.
+ */
+export function missingLessonNames(
+  referencedNames: readonly (string | null)[],
+  existingNames: readonly string[],
+): string[] {
+  const seen = new Set(existingNames.map(lessonNameKey));
+  const missing: string[] = [];
+  for (const name of referencedNames) {
+    const trimmed = name?.trim() ?? '';
+    if (trimmed === '') {
+      continue;
+    }
+    const key = lessonNameKey(trimmed);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    missing.push(trimmed);
+  }
+  return missing;
+}

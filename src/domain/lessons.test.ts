@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { ZodError } from 'zod';
 
-import { compareLessons, lessonFromRow, type Lesson } from '@/domain/lessons';
+import {
+  compareLessons,
+  lessonFromRow,
+  lessonNameKey,
+  missingLessonNames,
+  type Lesson,
+} from '@/domain/lessons';
 
 function lesson(name: string, position: number): Lesson {
   return { id: `lesson-${name}`, name, position, createdAt: new Date('2026-07-06T10:00:00.000Z') };
@@ -62,5 +68,37 @@ describe('compareLessons', () => {
       .sort(compareLessons)
       .map((entry) => entry.name);
     expect(sorted).toEqual(['Basics', 'Lesson 9', 'Lesson 10']);
+  });
+});
+
+describe('lessonNameKey', () => {
+  it('trims and lowercases', () => {
+    expect(lessonNameKey('  Lesson 7 ')).toBe('lesson 7');
+  });
+
+  it('matches names that differ only in case', () => {
+    expect(lessonNameKey('LESSON 7')).toBe(lessonNameKey('lesson 7'));
+  });
+});
+
+describe('missingLessonNames', () => {
+  it('returns names with no existing lesson, in first-appearance order', () => {
+    expect(missingLessonNames(['Lesson 2', 'Lesson 1'], [])).toEqual(['Lesson 2', 'Lesson 1']);
+  });
+
+  it('skips names that already exist, ignoring case and whitespace', () => {
+    expect(missingLessonNames([' lesson 7', 'Lesson 8'], ['Lesson 7'])).toEqual(['Lesson 8']);
+  });
+
+  it('dedupes repeated references case-insensitively, keeping the first spelling', () => {
+    expect(missingLessonNames(['Lesson 3', 'lesson 3', 'LESSON 3'], [])).toEqual(['Lesson 3']);
+  });
+
+  it('ignores null and blank references', () => {
+    expect(missingLessonNames([null, '', '   ', 'Lesson 4'], [])).toEqual(['Lesson 4']);
+  });
+
+  it('returns an empty list when every reference is covered', () => {
+    expect(missingLessonNames(['Lesson 1', null], ['lesson 1'])).toEqual([]);
   });
 });

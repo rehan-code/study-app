@@ -1,5 +1,11 @@
 import { cardFromRow, type Card, type CardFields, type ScanKind } from '@/domain/cards';
-import { compareLessons, lessonFromRow, type Lesson } from '@/domain/lessons';
+import {
+  compareLessons,
+  lessonFromRow,
+  lessonNameKey,
+  missingLessonNames,
+  type Lesson,
+} from '@/domain/lessons';
 import { pdfImportFromRow, type PdfImport } from '@/domain/pdf-import';
 import {
   draftToCardSeed,
@@ -252,20 +258,40 @@ function describeDraftProblem(problem: DraftValidation): string {
   return 'One of the rows is missing its meaning. Fill it in or remove the row.';
 }
 
+/** Insert that falls back to lookup, so a lesson another save already created is reused. */
+async function getOrCreateLessonId(name: string): Promise<string> {
+  const { data, error } = await getSupabase().from('lessons').insert({ name }).select('*').single();
+  if (error === null) {
+    return lessonFromRow(data).id;
+  }
+  if (error.code !== DUPLICATE_KEY_CODE) {
+    raise('create the lesson', error);
+  }
+  const { data: existing, error: lookupError } = await getSupabase()
+    .from('lessons')
+    .select('*')
+    .eq('name', name)
+    .single();
+  if (lookupError !== null) {
+    raise('create the lesson', lookupError);
+  }
+  return lessonFromRow(existing).id;
+}
+
 async function resolveLessonIds(drafts: readonly ReviewDraft[]): Promise<Map<string, string>> {
-  const idsByLowerName = new Map<string, string>();
-  for (const lesson of await listLessons()) {
-    idsByLowerName.set(lesson.name.trim().toLowerCase(), lesson.id);
+  const lessons = await listLessons();
+  const idsByKey = new Map<string, string>();
+  for (const lesson of lessons) {
+    idsByKey.set(lessonNameKey(lesson.name), lesson.id);
   }
-  for (const draft of drafts) {
-    const name = draft.lessonName?.trim();
-    if (!name || idsByLowerName.has(name.toLowerCase())) {
-      continue;
-    }
-    const created = await createLesson(name);
-    idsByLowerName.set(name.toLowerCase(), created.id);
+  const missing = missingLessonNames(
+    drafts.map((draft) => draft.lessonName),
+    lessons.map((lesson) => lesson.name),
+  );
+  for (const name of missing) {
+    idsByKey.set(lessonNameKey(name), await getOrCreateLessonId(name));
   }
-  return idsByLowerName;
+  return idsByKey;
 }
 
 export async function saveReviewedCards(input: SaveReviewInput): Promise<{ created: number }> {
@@ -274,7 +300,7 @@ export async function saveReviewedCards(input: SaveReviewInput): Promise<{ creat
   if (problems.length > 0) {
     throw new Error(describeDraftProblem(problems[0]));
   }
-  const lessonIdsByLowerName = await resolveLessonIds(included);
+  const lessonIdsByKey = await resolveLessonIds(included);
   const rows = included.map((draft) => {
     const seed = draftToCardSeed(draft);
     const lessonName = draft.lessonName?.trim();
@@ -282,10 +308,20 @@ export async function saveReviewedCards(input: SaveReviewInput): Promise<{ creat
       type: seed.type,
       fields: seed.fields,
       meaning: seed.meaning,
-      lesson_id: lessonName ? (lessonIdsByLowerName.get(lessonName.toLowerCase()) ?? null) : null,
+      lesson_id: lessonName ? (lessonIdsByKey.get(lessonNameKey(lessonName)) ?? null) : null,
       scan_id: input.scan.id,
     };
   });
+  // A save that failed midway can be retried: replacing this scan's cards
+  // keeps the retry from duplicating them, mirroring how import-pdf-batch
+  // replaces its own page batch.
+  const { error: cleanupError } = await getSupabase()
+    .from('cards')
+    .delete()
+    .eq('scan_id', input.scan.id);
+  if (cleanupError !== null) {
+    raise('save your cards', cleanupError);
+  }
   if (rows.length > 0) {
     const { error } = await getSupabase().from('cards').insert(rows);
     if (error !== null) {
