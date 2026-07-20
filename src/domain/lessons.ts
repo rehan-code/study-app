@@ -1,0 +1,33 @@
+import { z } from 'zod';
+
+export interface Lesson {
+  id: string;
+  name: string;
+  position: number;
+  createdAt: Date;
+}
+
+export const lessonRowSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  position: z.number().int(),
+  created_at: z.coerce.date(),
+});
+
+export function lessonFromRow(raw: unknown): Lesson {
+  const row = lessonRowSchema.parse(raw);
+  return {
+    id: row.id,
+    name: row.name,
+    position: row.position,
+    createdAt: row.created_at,
+  };
+}
+
+/** Orders by explicit position first, then numerically aware name ("Lesson 9" before "Lesson 10"). */
+export function compareLessons(a: Lesson, b: Lesson): number {
+  if (a.position !== b.position) {
+    return a.position - b.position;
+  }
+  return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+}

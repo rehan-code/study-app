@@ -1,0 +1,14 @@
+# Supabase CLI configuration for Mufradat.
+# `project_id` is a local workspace label only; the remote project is chosen
+# by `supabase link --project-ref <ref>` (see scripts/deploy-backend.sh and
+# docs/BACKEND.md).
+project_id = "arabic-study"
+
+# Both edge functions require a signed-in user's JWT. Requests without a valid
+# token are rejected before the function runs; inside the function, all data
+# access goes through the caller's RLS policies.
+[functions.parse-scan]
+verify_jwt = true
+
+[functions.generate-card-image]
+verify_jwt = true

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "arabic-study",
+    "name": "Mufradat",
     "slug": "arabic-study",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -8,11 +8,15 @@
     "scheme": "arabicstudy",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "bundleIdentifier": "com.mufradat.app",
+      "buildNumber": "1",
+      "supportsTablet": false,
+      "icon": "./assets/images/icon.png"
     },
     "android": {
+      "package": "com.mufradat.app",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0D7A6C",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -28,9 +32,16 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#0D7A6C",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "imageWidth": 120
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Mufradat needs access to your photos so you can turn pictures of your workbook pages into flashcards.",
+          "cameraPermission": "Mufradat uses the camera to photograph your workbook pages and turn them into flashcards."
         }
       ]
     ],
