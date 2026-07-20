@@ -13,6 +13,14 @@ const MAX_OUTPUT_TOKENS = 16000;
 const TOOL_NAME = 'record_imported_pages';
 
 /**
+ * A hung Anthropic request would otherwise run until the edge runtime kills
+ * the whole function, stranding the import in 'processing' with no last_error.
+ * Timing out below the platform wall-clock limit turns that into a normal
+ * resumable failure. Generous because dense pages can take minutes to parse.
+ */
+const ANTHROPIC_TIMEOUT_MS = 180_000;
+
+/**
  * Pages per Claude call. Six covers roughly one lesson (text, nouns spread,
  * synonyms page, verbs page, expressions page) while keeping the forced tool
  * output comfortably under MAX_OUTPUT_TOKENS.
@@ -20,6 +28,18 @@ const TOOL_NAME = 'record_imported_pages';
 const BATCH_PAGES = 6;
 
 const GENERIC_ERROR = "Couldn't read those pages. Try resuming the import.";
+
+/**
+ * Lost a claim race with another call working the same import. The import row
+ * belongs to the winner and is healthy, so the catch block must NOT mark the
+ * import failed on this path.
+ */
+class BatchConflictError extends HttpError {
+  constructor() {
+    super('Another import request is already running. Wait for it.', 409);
+    this.name = 'BatchConflictError';
+  }
+}
 
 const requestSchema = z.object({ importId: z.uuid() });
 
@@ -32,7 +52,10 @@ const importRecordSchema = z.object({
   current_lesson: z.string().nullable(),
   lessons_created: z.number().int().nonnegative(),
   cards_created: z.number().int().nonnegative(),
+  updated_at: z.string(),
 });
+
+const claimStampRowSchema = z.object({ updated_at: z.string() });
 
 const toolUseBlockSchema = z.object({ type: z.literal('tool_use'), input: z.unknown() });
 const anthropicMessageSchema = z.object({ content: z.array(z.unknown()) });
@@ -159,7 +182,14 @@ function buildToolInputSchema(): Record<string, unknown> {
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['lessonNumber', 'title', 'continuesPreviousBatch', 'nouns', 'verbs', 'phrases'],
+          required: [
+            'lessonNumber',
+            'title',
+            'continuesPreviousBatch',
+            'nouns',
+            'verbs',
+            'phrases',
+          ],
           properties: {
             lessonNumber: { type: ['integer', 'null'], minimum: 1 },
             title: { type: 'string' },
@@ -222,36 +252,49 @@ async function requestParseFromClaude(
     throw new HttpError("AI parsing isn't set up yet. Add the ANTHROPIC_API_KEY secret.", 500);
   }
   const model = Deno.env.get('ANTHROPIC_MODEL') ?? DEFAULT_MODEL;
-  const response = await fetch(ANTHROPIC_URL, {
-    method: 'POST',
-    headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': ANTHROPIC_VERSION,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: MAX_OUTPUT_TOKENS,
-      tools: [
-        {
-          name: TOOL_NAME,
-          description: 'Record the structured vocabulary extracted from these book pages.',
-          input_schema: buildToolInputSchema(),
-        },
-      ],
-      tool_choice: { type: 'tool', name: TOOL_NAME },
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: serializedPages },
-            { type: 'text', text: buildInstruction(currentLesson) },
-          ],
-        },
-      ],
-    }),
-  });
-  const bodyText = await response.text();
+  let response: Response;
+  let bodyText: string;
+  try {
+    response = await fetch(ANTHROPIC_URL, {
+      method: 'POST',
+      signal: AbortSignal.timeout(ANTHROPIC_TIMEOUT_MS),
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': ANTHROPIC_VERSION,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: MAX_OUTPUT_TOKENS,
+        tools: [
+          {
+            name: TOOL_NAME,
+            description: 'Record the structured vocabulary extracted from these book pages.',
+            input_schema: buildToolInputSchema(),
+          },
+        ],
+        tool_choice: { type: 'tool', name: TOOL_NAME },
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: serializedPages },
+              { type: 'text', text: buildInstruction(currentLesson) },
+            ],
+          },
+        ],
+      }),
+    });
+    bodyText = await response.text();
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'TimeoutError') {
+      console.error('import-pdf-batch: Anthropic request timed out', {
+        timeoutMs: ANTHROPIC_TIMEOUT_MS,
+      });
+      throw new HttpError('The AI service took too long. Resume to retry this batch.', 504);
+    }
+    throw error;
+  }
   if (!response.ok) {
     console.error('import-pdf-batch: Anthropic error', { status: response.status, body: bodyText });
     throw mapAnthropicError(response.status, bodyText);
@@ -404,7 +447,9 @@ Deno.serve(async (req) => {
 
   const { data: importRow, error: importError } = await supabase
     .from('pdf_imports')
-    .select('id, storage_path, status, total_pages, next_page, current_lesson, lessons_created, cards_created')
+    .select(
+      'id, storage_path, status, total_pages, next_page, current_lesson, lessons_created, cards_created, updated_at',
+    )
     .eq('id', importId)
     .maybeSingle();
   if (importError) {
@@ -431,23 +476,58 @@ Deno.serve(async (req) => {
     });
   }
 
+  const fromPage = current.next_page;
+  const claimStamp = new Date().toISOString();
+
   try {
+    // Claim the batch before any other work. The CAS on (next_page, updated_at)
+    // lets exactly one of two calls racing from the same row snapshot proceed;
+    // the loser exits here, before it has read the PDF or written anything.
+    const { data: claimed, error: claimError } = await supabase
+      .from('pdf_imports')
+      .update({ status: 'processing', last_error: null, updated_at: claimStamp })
+      .eq('id', importId)
+      .eq('next_page', fromPage)
+      .eq('updated_at', current.updated_at)
+      .select('id');
+    if (claimError) {
+      console.error('import-pdf-batch: batch claim failed', claimError);
+      throw new HttpError("Couldn't start this batch. Try resuming.", 500);
+    }
+    if (!claimed || claimed.length === 0) {
+      throw new BatchConflictError();
+    }
+
     const pdfBytes = await downloadPdf(supabase, current.storage_path);
-    const fromPage = current.next_page;
     const toPage = fromPage + BATCH_PAGES - 1;
     const { totalPages, pages } = await extractPositionedPages(pdfBytes, fromPage, toPage);
     if (fromPage > totalPages) {
       throw new HttpError('This import is already past the last page.', 409);
     }
 
-    const toolInput = await requestParseFromClaude(
-      serializePages(pages),
-      current.current_lesson,
-    );
+    const toolInput = await requestParseFromClaude(serializePages(pages), current.current_lesson);
     const validated = importedPagesSchema.safeParse(toolInput);
     if (!validated.success) {
       console.error('import-pdf-batch: tool output failed validation', validated.error);
       throw new HttpError('The AI returned an unexpected result. Resume to retry this batch.', 502);
+    }
+
+    // The Claude call is slow; a resume issued meanwhile may have reclaimed
+    // the batch. Re-check ownership so a superseded run exits before touching
+    // cards. Timestamps are compared as instants because PostgREST returns a
+    // different ISO offset format than Date.toISOString produces.
+    const { data: ownerRow, error: ownerError } = await supabase
+      .from('pdf_imports')
+      .select('updated_at')
+      .eq('id', importId)
+      .maybeSingle();
+    if (ownerError) {
+      console.error('import-pdf-batch: claim re-check failed', ownerError);
+      throw new HttpError("Couldn't save this batch. Try resuming.", 500);
+    }
+    const ownerStamp = claimStampRowSchema.safeParse(ownerRow);
+    if (!ownerStamp.success || Date.parse(ownerStamp.data.updated_at) !== Date.parse(claimStamp)) {
+      throw new BatchConflictError();
     }
 
     // Re-running a failed batch replaces whatever it managed to write.
@@ -487,8 +567,9 @@ Deno.serve(async (req) => {
     const lastProcessed = Math.min(toPage, totalPages);
     const nextPage = lastProcessed + 1;
     const done = nextPage > totalPages;
-    // The cursor equality check makes concurrent batch calls fail loudly
-    // instead of double-writing.
+    // Keyed on the claim stamp: only the call that still owns the claim can
+    // advance the cursor, so a superseded run fails loudly here instead of
+    // double-counting a batch.
     const { data: advanced, error: advanceError } = await supabase
       .from('pdf_imports')
       .update({
@@ -503,10 +584,14 @@ Deno.serve(async (req) => {
       })
       .eq('id', importId)
       .eq('next_page', fromPage)
+      .eq('updated_at', claimStamp)
       .select('id');
-    if (advanceError || !advanced || advanced.length === 0) {
+    if (advanceError) {
       console.error('import-pdf-batch: cursor advance failed', advanceError);
-      throw new HttpError('Another import request is already running. Wait for it.', 409);
+      throw new HttpError("Couldn't finish this batch. Try resuming.", 500);
+    }
+    if (!advanced || advanced.length === 0) {
+      throw new BatchConflictError();
     }
 
     return jsonResponse({
@@ -528,10 +613,18 @@ Deno.serve(async (req) => {
     if (!(error instanceof HttpError)) {
       console.error('import-pdf-batch: unexpected failure', error);
     }
+    // Losing the claim means another call owns the import and its state is
+    // healthy; marking it failed here would clobber the winner's progress.
+    if (error instanceof BatchConflictError) {
+      return errorResponse(message, status);
+    }
+    // Guarded by the claim stamp so a run that was superseded mid-failure
+    // still cannot overwrite the current owner's state.
     const { error: failError } = await supabase
       .from('pdf_imports')
       .update({ status: 'failed', last_error: message, updated_at: new Date().toISOString() })
-      .eq('id', importId);
+      .eq('id', importId)
+      .eq('updated_at', claimStamp);
     if (failError) {
       console.error('import-pdf-batch: could not record failure', failError);
     }
