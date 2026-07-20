@@ -67,6 +67,6 @@ else
 fi
 
 echo "==> Deploying edge functions"
-supabase functions deploy parse-scan generate-card-image
+supabase functions deploy parse-scan generate-card-image import-pdf-batch
 
 echo "==> Done. Smoke-test instructions: docs/BACKEND.md"

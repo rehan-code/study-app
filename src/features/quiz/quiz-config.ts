@@ -5,22 +5,46 @@ import { buildQuiz, mulberry32, type QuizKind } from '@/domain/quiz';
 
 export const QUIZ_COUNT_OPTIONS: readonly number[] = [5, 10, 20];
 export const DEFAULT_QUIZ_COUNT = 10;
-export const DEFAULT_QUIZ_KINDS: readonly QuizKind[] = ['present'];
 export const MIN_QUIZ_QUESTIONS = 2;
 
 export interface QuizKindOption {
   kind: QuizKind;
   label: string;
+  verbOnly: boolean;
 }
 
 export const QUIZ_KIND_OPTIONS: readonly QuizKindOption[] = [
-  { kind: 'present', label: 'Present المضارع' },
-  { kind: 'imperative', label: 'Command الأمر' },
-  { kind: 'masdar', label: 'Verbal noun المصدر' },
-  { kind: 'meaning', label: 'Meaning' },
+  { kind: 'present', label: 'Present المضارع', verbOnly: true },
+  { kind: 'imperative', label: 'Command الأمر', verbOnly: true },
+  { kind: 'masdar', label: 'Verbal noun المصدر', verbOnly: true },
+  { kind: 'meaning', label: 'Meaning', verbOnly: false },
+  { kind: 'plural', label: 'Plural الجمع', verbOnly: false },
 ];
 
 const KIND_ORDER: readonly QuizKind[] = QUIZ_KIND_OPTIONS.map((option) => option.kind);
+
+const VERB_ONLY_KINDS: ReadonlySet<QuizKind> = new Set(
+  QUIZ_KIND_OPTIONS.filter((option) => option.verbOnly).map((option) => option.kind),
+);
+
+/**
+ * The starting question-type selection for a card mix: verb practice when verbs
+ * exist, otherwise the richest type the cards support. Keeps nouns-only and
+ * phrases-only collections quizzable without hunting through toggles.
+ */
+export function defaultQuizKinds(cards: readonly Card[]): QuizKind[] {
+  if (cards.some((card) => card.type === 'verb')) {
+    return ['present'];
+  }
+  const hasPlural = cards.some(
+    (card) =>
+      card.type === 'vocab' && (card.fields.plural1 !== null || card.fields.plural2 !== null),
+  );
+  if (hasPlural) {
+    return ['plural', 'meaning'];
+  }
+  return ['meaning'];
+}
 
 /** Toggles a kind while keeping the canonical option order. */
 export function toggleQuizKind(kinds: readonly QuizKind[], kind: QuizKind): QuizKind[] {
@@ -56,8 +80,8 @@ export function startBlockedReason(
     return 'No cards in these lessons yet. Scan a workbook page on the Scan tab first.';
   }
   if (eligible < MIN_QUIZ_QUESTIONS) {
-    if (!kinds.includes('meaning')) {
-      return 'Not enough verb cards for these question types. Scan some verb pages first, or turn on Meaning questions.';
+    if (kinds.every((kind) => VERB_ONLY_KINDS.has(kind))) {
+      return 'These question types need verb cards. Turn on Meaning or Plural, or scan verb pages first.';
     }
     return 'Not enough cards to quiz yet. Scan a few more pages first.';
   }

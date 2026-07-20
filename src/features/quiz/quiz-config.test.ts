@@ -6,6 +6,7 @@ import { newSrsState } from '@/domain/srs';
 
 import {
   countEligibleQuestions,
+  defaultQuizKinds,
   describeLessonSelection,
   parseQuizParams,
   serializeQuizParams,
@@ -153,16 +154,49 @@ describe('startBlockedReason', () => {
     expect(startBlockedReason(0, ['present'], 0)).toMatch(/scan/i);
   });
 
-  it('suggests meaning questions when verb kinds alone are too sparse', () => {
-    expect(startBlockedReason(1, ['present'], 5)).toMatch(/meaning/i);
+  it('suggests any-card questions when only verb kinds are on', () => {
+    expect(startBlockedReason(1, ['present'], 5)).toMatch(/meaning or plural/i);
+    expect(startBlockedReason(1, ['present', 'imperative', 'masdar'], 5)).toMatch(
+      /meaning or plural/i,
+    );
   });
 
-  it('asks for more cards when meaning is already on', () => {
+  it('asks for more cards when an any-card kind is already on', () => {
     expect(startBlockedReason(1, ['present', 'meaning'], 1)).toMatch(/more pages/i);
+    expect(startBlockedReason(1, ['plural'], 1)).toMatch(/more pages/i);
   });
 
   it('returns null when enough questions are available', () => {
     expect(startBlockedReason(2, ['present'], 5)).toBeNull();
+  });
+});
+
+describe('defaultQuizKinds', () => {
+  function withPlural(card: Card, plural1: string): Card {
+    if (card.type !== 'vocab') {
+      throw new Error('expected a vocab card');
+    }
+    return { ...card, fields: { ...card.fields, plural1 } };
+  }
+
+  it('prefers verb practice when any verb card exists', () => {
+    const bab = vocabCard('n-bab', 'بَاب', 'Door');
+    expect(defaultQuizKinds([bab, ittasala])).toEqual(['present']);
+  });
+
+  it('starts nouns-only collections on plural and meaning questions', () => {
+    const bab = withPlural(vocabCard('n-bab', 'بَاب', 'Door'), 'أَبْوَاب');
+    const bayt = vocabCard('n-bayt', 'بَيْت', 'House');
+    expect(defaultQuizKinds([bab, bayt])).toEqual(['plural', 'meaning']);
+  });
+
+  it('falls back to meaning when no card has a plural', () => {
+    const bab = vocabCard('n-bab', 'بَاب', 'Door');
+    expect(defaultQuizKinds([bab])).toEqual(['meaning']);
+  });
+
+  it('falls back to meaning for an empty collection', () => {
+    expect(defaultQuizKinds([])).toEqual(['meaning']);
   });
 });
 

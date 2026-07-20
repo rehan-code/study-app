@@ -1,5 +1,6 @@
 import { cardFromRow, type Card, type CardFields, type ScanKind } from '@/domain/cards';
 import { compareLessons, lessonFromRow, type Lesson } from '@/domain/lessons';
+import { pdfImportFromRow, type PdfImport } from '@/domain/pdf-import';
 import {
   draftToCardSeed,
   validateDrafts,
@@ -17,6 +18,7 @@ export const queryKeys = {
   scans: ['scans'] as const,
   scan: (id: string) => ['scans', 'byId', id] as const,
   signedUrl: (bucket: string, path: string) => ['signed-url', bucket, path] as const,
+  pdfImports: ['pdf-imports'] as const,
 };
 
 /** Virtual filter id for cards without a lesson. */
@@ -298,4 +300,48 @@ export async function saveReviewedCards(input: SaveReviewInput): Promise<{ creat
     raise('finish the review', statusError);
   }
   return { created: rows.length };
+}
+
+/** Uploads a picked PDF into the scans bucket under the user's import folder. */
+export async function uploadPdf(localUri: string): Promise<string> {
+  const userId = await requireUserId();
+  const response = await fetch(localUri);
+  if (!response.ok) {
+    throw new Error("Couldn't read that PDF. Please try again.");
+  }
+  const body = await response.arrayBuffer();
+  const path = `${userId}/imports/${makeStorageSlug()}.pdf`;
+  const { error } = await getSupabase()
+    .storage.from('scans')
+    .upload(path, body, { contentType: 'application/pdf' });
+  if (error !== null) {
+    raise('upload the PDF', error);
+  }
+  return path;
+}
+
+export async function createPdfImport(storagePath: string): Promise<PdfImport> {
+  const { data, error } = await getSupabase()
+    .from('pdf_imports')
+    .insert({ storage_path: storagePath })
+    .select('*')
+    .single();
+  if (error !== null) {
+    raise('start the import', error);
+  }
+  return pdfImportFromRow(data);
+}
+
+/** The most recent import, done or not; null when none was ever started. */
+export async function getLatestPdfImport(): Promise<PdfImport | null> {
+  const { data, error } = await getSupabase()
+    .from('pdf_imports')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error !== null) {
+    raise('load your imports', error);
+  }
+  return data === null ? null : pdfImportFromRow(data);
 }

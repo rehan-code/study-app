@@ -1,6 +1,6 @@
 import { cardHeadline, type Card } from '@/domain/cards';
 
-export type QuizKind = 'present' | 'imperative' | 'masdar' | 'meaning';
+export type QuizKind = 'present' | 'imperative' | 'masdar' | 'meaning' | 'plural';
 
 export interface QuizQuestion {
   cardId: string;
@@ -23,6 +23,7 @@ const INSTRUCTIONS: Record<QuizKind, string> = {
   imperative: 'Pick the command form (الأمر)',
   masdar: 'Pick the verbal noun (المصدر)',
   meaning: 'Pick the meaning',
+  plural: 'Pick the plural (الجمع)',
 };
 
 const PREFERRED_DISTRACTORS = 3;
@@ -55,6 +56,12 @@ function correctAnswerFor(card: Card, kind: QuizKind): string | null {
   if (kind === 'meaning') {
     const meaning = card.meaning.trim();
     return meaning.length > 0 ? meaning : null;
+  }
+  if (kind === 'plural') {
+    if (card.type !== 'vocab') {
+      return null;
+    }
+    return card.fields.plural1 ?? card.fields.plural2;
   }
   if (card.type !== 'verb') {
     return null;

@@ -42,3 +42,6 @@ example
 /ios
 /android
 .env
+
+# supabase CLI workspace state
+supabase/.temp/

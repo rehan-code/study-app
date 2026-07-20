@@ -60,3 +60,18 @@ request and asks for strict JSON: ordered rows with per-column strings
 (preserving harakat exactly), plus detected lesson markers with the row index
 they precede. Output lands in `scans.parsed_rows`; the review screen lets the
 user fix any cell and confirm lesson assignment before cards are created.
+
+## Book PDF import
+
+The workbook pages photographed above are printed from the "Kashf Al-Mufradaat"
+curriculum PDF (856 pages, one lesson block repeating: lesson text, nouns
+table, synonyms/antonyms table, verbs table, expressions table). The printed
+tables carry the same columns as the scan kinds, plus an expressions layout:
+
+التعبير | المعنى | الجملة (expression, English meaning, example sentence)
+
+which maps to phrase cards with the example sentence in note. The PDF is
+digitally generated with a full text layer, so `import-pdf-batch` extracts
+positioned text (no page rendering) and Claude reconstructs the tables from
+coordinates. Blank student-fill tables (headers only) are skipped; lesson
+headings like الدرس الأول become "Lesson 1" with position set for ordering.

@@ -307,6 +307,58 @@ describe('buildQuiz meaning questions', () => {
   });
 });
 
+describe('buildQuiz plural questions', () => {
+  function pluralCard(
+    id: string,
+    arabic: string,
+    meaning: string,
+    plural1: string | null,
+    plural2: string | null = null,
+  ): Card {
+    const base = vocabCard(id, arabic, meaning);
+    if (base.type !== 'vocab') {
+      throw new Error('expected a vocab card');
+    }
+    return { ...base, fields: { ...base.fields, plural1, plural2 } };
+  }
+
+  const bab = pluralCard('n-bab', 'بَاب', 'Door', 'أَبْوَاب');
+  const bayt = pluralCard('n-bayt', 'بَيْت', 'House', 'بُيُوت');
+  const qalb = pluralCard('n-qalb', 'قَلْب', 'Heart', 'قُلُوب');
+
+  it('builds plural questions from vocab cards', () => {
+    const cards = [bab, bayt, qalb];
+    const questions = buildQuiz(cards, { count: 3, kinds: ['plural'], rng: mulberry32(4) });
+    expect(questions).toHaveLength(3);
+    for (const question of questions) {
+      const card = findCard(cards, question);
+      if (card.type !== 'vocab') {
+        throw new Error('expected a vocab card');
+      }
+      expect(question.kind).toBe('plural');
+      expect(question.instruction).toBe('Pick the plural (الجمع)');
+      expect(question.choices[question.correctIndex]).toBe(card.fields.plural1);
+    }
+  });
+
+  it('falls back to the second plural when the first is missing', () => {
+    const cards = [pluralCard('n-akh', 'أَخ', 'Brother', null, 'إِخْوَة'), bab, bayt];
+    const questions = buildQuiz(cards, { count: 3, kinds: ['plural'], rng: mulberry32(7) });
+    const forAkh = questions.find((question) => question.cardId === 'n-akh');
+    expect(forAkh?.choices[forAkh.correctIndex]).toBe('إِخْوَة');
+  });
+
+  it('skips vocab cards without any plural and all non-vocab cards', () => {
+    const questions = buildQuiz([usbu, ittasala, bab, bayt], {
+      count: 10,
+      kinds: ['plural'],
+      rng: mulberry32(9),
+    });
+    const ids = questions.map((question) => question.cardId).sort();
+    expect(ids).toEqual(['n-bab', 'n-bayt']);
+  });
+});
+
 describe('buildQuiz composition', () => {
   it('never repeats a card within one quiz', () => {
     const cards = [...fullVerbs, ihtaja, usbu, yameen];

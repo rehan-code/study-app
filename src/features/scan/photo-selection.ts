@@ -2,12 +2,18 @@ export const MAX_SCAN_PAGES = 2;
 
 export interface ScanPhoto {
   uri: string;
+  /** Decoded dimensions from the picker; missing or zero when unreported. */
+  width?: number;
+  height?: number;
 }
 
 const PAGE_ORDER_LABELS = ['Right page', 'Left page'] as const;
 
-export function pageLabelForIndex(index: number): string {
-  const label = PAGE_ORDER_LABELS[index];
+export function pageLabelForIndex(
+  index: number,
+  labels: readonly string[] = PAGE_ORDER_LABELS,
+): string {
+  const label = labels[index];
   if (label !== undefined) {
     return label;
   }

@@ -81,6 +81,7 @@ function PhotosStep({ info, photos, onPhotosChange, onSubmit }: PhotosStepProps)
   const [picking, setPicking] = useState(false);
   const [pickerError, setPickerError] = useState<string | null>(null);
   const remaining = remainingPhotoSlots(photos);
+  const pageLabels = info.pages.map((page) => page.label);
 
   const takePhoto = async () => {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
@@ -110,7 +111,11 @@ function PhotosStep({ info, photos, onPhotosChange, onSubmit }: PhotosStepProps)
     onPhotosChange(
       addPhotos(
         photos,
-        result.assets.map((asset) => ({ uri: asset.uri })),
+        result.assets.map((asset) => ({
+          uri: asset.uri,
+          width: asset.width,
+          height: asset.height,
+        })),
       ),
     );
   };
@@ -129,7 +134,11 @@ function PhotosStep({ info, photos, onPhotosChange, onSubmit }: PhotosStepProps)
     onPhotosChange(
       addPhotos(
         photos,
-        result.assets.map((asset) => ({ uri: asset.uri })),
+        result.assets.map((asset) => ({
+          uri: asset.uri,
+          width: asset.width,
+          height: asset.height,
+        })),
       ),
     );
   };
@@ -157,12 +166,19 @@ function PhotosStep({ info, photos, onPhotosChange, onSubmit }: PhotosStepProps)
           <Surface key={`${photo.uri}-${index}`} padded={false} style={styles.photoCard}>
             <Image source={{ uri: photo.uri }} style={styles.photoImage} contentFit="cover" />
             <View style={styles.photoFooter}>
-              <Text style={[styles.photoLabel, { color: theme.text }]}>
-                {pageLabelForIndex(index)}
-              </Text>
+              <View style={styles.photoLabels}>
+                <Text style={[styles.photoLabel, { color: theme.text }]}>
+                  {pageLabelForIndex(index, pageLabels)}
+                </Text>
+                {info.pages[index] !== undefined && (
+                  <Text style={[styles.photoHintText, { color: theme.textSecondary }]}>
+                    {info.pages[index].hint}
+                  </Text>
+                )}
+              </View>
               <IconButton
                 icon="xmark"
-                accessibilityLabel={`Remove ${pageLabelForIndex(index)}`}
+                accessibilityLabel={`Remove ${pageLabelForIndex(index, pageLabels)}`}
                 size={16}
                 themeColor="textSecondary"
                 onPress={() => {
@@ -381,10 +397,19 @@ const styles = StyleSheet.create({
     paddingRight: Spacing.one,
     paddingVertical: Spacing.one,
   },
+  photoLabels: {
+    flex: 1,
+    gap: 2,
+  },
   photoLabel: {
     fontSize: 15,
     lineHeight: 21,
     fontWeight: 600,
+  },
+  photoHintText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: 500,
   },
   pickButtons: {
     flexDirection: 'row',

@@ -70,6 +70,7 @@ export default function RootLayout() {
               <Stack.Screen name="quiz/index" />
               <Stack.Screen name="quiz/session" />
               <Stack.Screen name="scan/new" />
+              <Stack.Screen name="scan/import-pdf" />
               <Stack.Screen name="scan/[id]/review" />
               <Stack.Screen name="lesson/[id]" />
               <Stack.Screen name="card/[id]" />

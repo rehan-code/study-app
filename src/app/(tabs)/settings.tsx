@@ -8,6 +8,7 @@ import { signOut, useSession } from '@/lib/auth';
 import { useSettings } from '@/lib/stores';
 
 import { ListRow } from '@/components/list-row';
+import { MountOnFocus } from '@/components/mount-on-focus';
 import { Screen } from '@/components/screen';
 import { Stepper } from '@/components/stepper';
 import { ThemedText } from '@/components/themed-text';
@@ -19,6 +20,14 @@ const NEW_CARDS_MAX = 50;
 const NEW_CARDS_STEP = 5;
 
 export default function SettingsRoute() {
+  return (
+    <MountOnFocus>
+      <SettingsScreen />
+    </MountOnFocus>
+  );
+}
+
+function SettingsScreen() {
   const theme = useTheme();
   const { session } = useSession();
   const { aiImagesEnabled, newCardsPerSession, setAiImagesEnabled, setNewCardsPerSession } =

@@ -2,6 +2,7 @@ import { FunctionsFetchError, FunctionsHttpError } from '@supabase/supabase-js';
 import { z } from 'zod';
 
 import { parsedScanSchema, type ParsedScan } from '@/domain/parsed-scan';
+import { importBatchResultSchema, type ImportBatchResult } from '@/domain/pdf-import';
 import { getSupabase } from '@/lib/supabase';
 
 const NETWORK_ERROR_MESSAGE = "Couldn't reach the server. Check your connection and try again.";
@@ -73,4 +74,15 @@ export async function generateCardImage(cardId: string): Promise<{ path: string 
     throw new Error(fallback);
   }
   return { path: parsed.data.path };
+}
+
+/** Processes the import's next page batch; call repeatedly until status is done. */
+export async function importPdfBatch(importId: string): Promise<ImportBatchResult> {
+  const fallback = "Couldn't read those pages. Try resuming the import.";
+  const data = await invokeEdgeFunction('import-pdf-batch', { importId }, fallback);
+  const parsed = importBatchResultSchema.safeParse(data);
+  if (!parsed.success) {
+    throw new Error(fallback);
+  }
+  return parsed.data;
 }

@@ -12,3 +12,6 @@ verify_jwt = true
 
 [functions.generate-card-image]
 verify_jwt = true
+
+[functions.import-pdf-batch]
+verify_jwt = true

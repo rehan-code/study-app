@@ -70,6 +70,39 @@ function ScanRow({ scan, now, onPress, onLongPress }: ScanRowProps) {
   );
 }
 
+function ImportBookRow({ onPress }: { onPress: () => void }) {
+  const theme = useTheme();
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Import the whole book"
+      onPress={onPress}
+      style={({ pressed }) => [styles.importRowWrap, { opacity: pressed ? 0.7 : 1 }]}
+    >
+      <Surface style={styles.rowSurface}>
+        <View style={[styles.rowIcon, { backgroundColor: theme.primarySoft }]}>
+          <SymbolView name="book.closed" size={20} tintColor={theme.primary} />
+        </View>
+        <View style={styles.rowText}>
+          <Text style={[styles.rowTitle, { color: theme.text }]} numberOfLines={1}>
+            Import the whole book
+          </Text>
+          <Text style={[styles.rowSubtitle, { color: theme.textSecondary }]} numberOfLines={1}>
+            Turn the curriculum PDF into cards
+          </Text>
+        </View>
+        <SymbolView
+          name="chevron.right"
+          size={13}
+          weight="semibold"
+          tintColor={theme.textSecondary}
+        />
+      </Surface>
+    </Pressable>
+  );
+}
+
 export function ScanHistoryScreen() {
   const theme = useTheme();
   const router = useRouter();
@@ -193,6 +226,13 @@ export function ScanHistoryScreen() {
           }}
         />
       </View>
+      {!scansQuery.isPending && !scansQuery.isError && (
+        <ImportBookRow
+          onPress={() => {
+            router.push('/scan/import-pdf');
+          }}
+        />
+      )}
       {body}
     </Screen>
   );
@@ -204,6 +244,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingTop: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingBottom: Spacing.two,
+  },
+  importRowWrap: {
     paddingHorizontal: Spacing.three,
     paddingBottom: Spacing.two,
   },

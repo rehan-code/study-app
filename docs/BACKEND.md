@@ -1,8 +1,9 @@
 # Backend setup
 
 How to stand up the Mufradat backend on a personal Supabase project: database,
-storage, auth, and the two Deno edge functions (`parse-scan`,
-`generate-card-image`). The whole flow takes about ten minutes.
+storage, auth, and the three Deno edge functions (`parse-scan`,
+`generate-card-image`, `import-pdf-batch`). The whole flow takes about ten
+minutes.
 
 This is a personal project. Do NOT use a work organization; create the project
 under your own Supabase account.
@@ -142,6 +143,23 @@ curl -s -X POST "$SUPABASE_URL/functions/v1/generate-card-image" \
 
 With a real card id (from the `cards` table), success responds
 `{"path":"<userId>/<cardId>.jpg"}` and fills the card's `ai_image_path`.
+
+### import-pdf-batch
+
+```sh
+curl -s -X POST "$SUPABASE_URL/functions/v1/import-pdf-batch" \
+  -H "Authorization: Bearer $USER_JWT" \
+  -H "apikey: $ANON_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"importId":"00000000-0000-0000-0000-000000000000"}'
+# -> {"error":"Import not found."}
+```
+
+Real imports are driven from the app (Scan tab -> Import book): the app uploads
+the PDF, inserts a `pdf_imports` row, then calls this function repeatedly. Each
+call reads the next page batch (positioned text via pdf.js, no rendering), has
+Claude return structured rows, writes lessons and cards, and advances
+`next_page`. Interrupting is safe; the next call resumes at the cursor.
 
 ## 7. Troubleshooting
 

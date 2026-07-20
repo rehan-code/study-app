@@ -8,13 +8,13 @@
     "scheme": "arabicstudy",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "bundleIdentifier": "com.mufradat.app",
+      "bundleIdentifier": "com.rehanmohideen.mufradat",
       "buildNumber": "1",
       "supportsTablet": false,
       "icon": "./assets/images/icon.png"
     },
     "android": {
-      "package": "com.mufradat.app",
+      "package": "com.rehanmohideen.mufradat",
       "adaptiveIcon": {
         "backgroundColor": "#0D7A6C",
         "foregroundImage": "./assets/images/android-icon-foreground.png",

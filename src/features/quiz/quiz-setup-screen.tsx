@@ -19,7 +19,7 @@ import { useStudyFilter } from '@/lib/stores';
 import {
   countEligibleQuestions,
   DEFAULT_QUIZ_COUNT,
-  DEFAULT_QUIZ_KINDS,
+  defaultQuizKinds,
   describeLessonSelection,
   QUIZ_COUNT_OPTIONS,
   QUIZ_KIND_OPTIONS,
@@ -29,10 +29,16 @@ import {
 } from '@/features/quiz/quiz-config';
 import { SegmentedOptions } from '@/features/quiz/segmented-options';
 
+const questionTypeGroups = [
+  { caption: 'Any card', options: QUIZ_KIND_OPTIONS.filter((option) => !option.verbOnly) },
+  { caption: 'Verb cards only', options: QUIZ_KIND_OPTIONS.filter((option) => option.verbOnly) },
+];
+
 export function QuizSetupScreen() {
   const selectedLessonIds = useStudyFilter((state) => state.selectedLessonIds);
   const [count, setCount] = useState(DEFAULT_QUIZ_COUNT);
-  const [kinds, setKinds] = useState<QuizKind[]>([...DEFAULT_QUIZ_KINDS]);
+  // null until the user touches the toggles; the default follows the card mix.
+  const [chosenKinds, setChosenKinds] = useState<QuizKind[] | null>(null);
 
   const cardsQuery = useQuery({
     queryKey: queryKeys.cards(selectedLessonIds),
@@ -44,6 +50,10 @@ export function QuizSetupScreen() {
   });
 
   const cards = cardsQuery.data;
+  const kinds = useMemo(
+    () => chosenKinds ?? (cards === undefined ? [] : defaultQuizKinds(cards)),
+    [chosenKinds, cards],
+  );
   const eligible = useMemo(
     () => (cards === undefined ? 0 : countEligibleQuestions(cards, kinds)),
     [cards, kinds],
@@ -121,16 +131,23 @@ export function QuizSetupScreen() {
           <ThemedText type="smallBold" themeColor="textSecondary">
             Question types
           </ThemedText>
-          <View style={styles.chips}>
-            {QUIZ_KIND_OPTIONS.map((option) => (
-              <Chip
-                key={option.kind}
-                label={option.label}
-                selected={kinds.includes(option.kind)}
-                onPress={() => setKinds((previous) => toggleQuizKind(previous, option.kind))}
-              />
-            ))}
-          </View>
+          {questionTypeGroups.map((group) => (
+            <View key={group.caption} style={styles.chipGroup}>
+              <ThemedText type="small" themeColor="textSecondary">
+                {group.caption}
+              </ThemedText>
+              <View style={styles.chips}>
+                {group.options.map((option) => (
+                  <Chip
+                    key={option.kind}
+                    label={option.label}
+                    selected={kinds.includes(option.kind)}
+                    onPress={() => setChosenKinds(toggleQuizKind(kinds, option.kind))}
+                  />
+                ))}
+              </View>
+            </View>
+          ))}
         </View>
 
         <View style={styles.footer}>
@@ -168,6 +185,9 @@ const styles = StyleSheet.create({
   },
   section: {
     gap: Spacing.two,
+  },
+  chipGroup: {
+    gap: Spacing.one,
   },
   chips: {
     flexDirection: 'row',

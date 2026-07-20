@@ -41,10 +41,15 @@ supabase/migrations/0001_init.sql (data model).
 
 - `lessons(id, user_id, name unique per user, position, created_at)`
 - `scans(id, user_id, kind nouns|verbs|phrases, page_paths text[], status uploaded|parsing|parsed|reviewed|failed, parsed_rows jsonb, parse_error, created_at)`
-- `cards(id, user_id, lesson_id?, scan_id?, type vocab|verb|phrase, fields jsonb, meaning, ai_image_path?, image_enabled, box, due_at, correct_count, incorrect_count, last_reviewed_at?, created_at)`
-- Storage buckets (private): `scans` (page photos), `card-images` (generated study images).
+- `cards(id, user_id, lesson_id?, scan_id?, pdf_import_id?, import_page?, type vocab|verb|phrase, fields jsonb, meaning, ai_image_path?, image_enabled, box, due_at, correct_count, incorrect_count, last_reviewed_at?, created_at)`
+- `pdf_imports(id, user_id, storage_path, status created|processing|done|failed, total_pages?, next_page, current_lesson?, lessons_created, cards_created, last_error?, created_at, updated_at)`:
+  whole-book imports; `next_page` is the resume cursor, and `(pdf_import_id, import_page)` on
+  cards lets a re-run of a batch replace its own cards instead of duplicating them.
+- Storage buckets (private): `scans` (page photos and uploaded book PDFs), `card-images`
+  (generated study images).
 - Storage path conventions: scans `${userId}/${slug}.jpg` where slug is from
-  `makeStorageSlug()`; card images `${userId}/${cardId}.jpg` (upsert on regenerate).
+  `makeStorageSlug()`; book PDFs `${userId}/imports/${slug}.pdf`; card images
+  `${userId}/${cardId}.jpg` (upsert on regenerate).
 
 ## Domain contracts
 
@@ -311,6 +316,7 @@ colors, no text, no letters." Call fal.ai (`FAL_KEY`; model id from `FAL_MODEL`,
 | `src/app/quiz/index.tsx`       | Quiz setup: question count (5/10/20), kind toggles (present on by default), start. Shows eligible-question availability.                                                                    |
 | `src/app/quiz/session.tsx`     | Quiz runner + results.                                                                                                                                                                      |
 | `src/app/scan/new.tsx`         | Kind picker (three friendly cards explaining each layout), pick/take 1-2 photos in right-page-then-left-page order, reorder/remove, upload + parse with progress, then navigate to review.  |
+| `src/app/scan/import-pdf.tsx`  | Whole-book import: pick the curriculum PDF, upload, then drive `import-pdf-batch` one page batch at a time with progress, pause/resume, and a resumable cursor in `pdf_imports`.           |
 | `src/app/scan/[id]/review.tsx` | Review parsed rows: editable fields per FIELD_LABELS, meaning, per-row lesson assignment seeded from markers, bulk lesson set, exclude row, validation, save all.                           |
 | `src/app/lesson/[id].tsx`      | Cards in a lesson; rename/delete lesson.                                                                                                                                                    |
 | `src/app/card/[id].tsx`        | Card detail: edit fields + meaning, image section (preview, generate/regenerate, per-card toggle), SRS stats, reset progress, change lesson, delete.                                        |

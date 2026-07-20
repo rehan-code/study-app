@@ -64,7 +64,7 @@ export function useSubmitScan(): UseSubmitScanResult {
         try {
           const paths: string[] = [];
           for (const photo of photos) {
-            const prepared = await preparePhotoForUpload(photo.uri);
+            const prepared = await preparePhotoForUpload(photo);
             paths.push(await uploadScanPage(prepared));
           }
           const scan = await createScan(kind, paths);
