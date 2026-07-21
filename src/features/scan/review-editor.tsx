@@ -40,9 +40,12 @@ import {
   toggleDraftExcluded,
   type DraftFieldErrors,
 } from '@/features/scan/review-drafts';
+import { generateImagesForCards } from '@/features/scan/generate-card-images';
 import { ReviewRow } from '@/features/scan/review-row';
 import { useTheme } from '@/hooks/use-theme';
+import { generateCardImage } from '@/lib/api';
 import { queryKeys, saveReviewedCards } from '@/lib/queries';
+import { useSettings } from '@/lib/stores';
 
 export interface ReviewEditorProps {
   scan: Scan;
@@ -112,9 +115,19 @@ export function ReviewEditor({ scan, parsed }: ReviewEditorProps) {
 
   const saveMutation = useMutation({
     mutationFn: saveReviewedCards,
-    onSuccess: async () => {
+    onSuccess: async ({ cardIds }) => {
       savedRef.current = true;
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (useSettings.getState().aiImagesEnabled && cardIds.length > 0) {
+        // Fire and forget: pictures fill in while the user browses the library.
+        void generateImagesForCards(cardIds, {
+          generate: generateCardImage,
+          onImageReady: (cardId) => {
+            void queryClient.invalidateQueries({ queryKey: queryKeys.cards([]) });
+            void queryClient.invalidateQueries({ queryKey: queryKeys.card(cardId) });
+          },
+        });
+      }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.lessons }),
         // queryKeys.cards([]) partially matches every card list query.
