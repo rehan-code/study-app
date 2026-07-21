@@ -30,12 +30,15 @@ export async function preparePhotoForUpload(photo: ScanPhoto): Promise<string> {
     return saved.uri;
   }
 
+  // Re-manipulate by uri rather than passing the rendered ImageRef back into
+  // manipulate(): the SDK 57 Either<URL, SharedRef> argument converter trips
+  // an uncatchable native assertion on shared refs and kills the app.
   const original = await ImageManipulator.manipulate(photo.uri).renderAsync();
   const target = resizeTargetFor(original.width, original.height);
   const image =
     target === null
       ? original
-      : await ImageManipulator.manipulate(original).resize(target).renderAsync();
+      : await ImageManipulator.manipulate(photo.uri).resize(target).renderAsync();
   const saved = await image.saveAsync({ compress: UPLOAD_JPEG_QUALITY, format: SaveFormat.JPEG });
   return saved.uri;
 }

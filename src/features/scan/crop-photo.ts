@@ -1,6 +1,6 @@
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 
-import { pixelCropRect, scaleRect, type CropRect, type Size } from '@/features/scan/crop-geometry';
+import { pixelCropRect, type CropRect, type Size } from '@/features/scan/crop-geometry';
 import { resizeTargetFor } from '@/features/scan/image-sizing';
 import type { ScanPhoto } from '@/features/scan/photo-selection';
 
@@ -28,9 +28,13 @@ export function uncroppedPhotoFrom(photo: ScanPhoto, sourceSize: Size): ScanPhot
 }
 
 /**
- * Renders `rect` (in source pixel coordinates) as a new photo. Downscales to
- * the upload ceiling in the same pass so a full-resolution camera photo is
- * never rendered untouched (see preparePhotoForUpload for why that matters).
+ * Renders `rect` (in source pixel coordinates) as a new photo. Crop and resize
+ * run in one manipulator chain from the file uri: passing a rendered ImageRef
+ * back into ImageManipulator.manipulate() trips an uncatchable native
+ * assertion in SDK 57's Either<URL, SharedRef> argument converter and kills
+ * the app. Cropping first also keeps the rect in source coordinates, whose
+ * exact dimensions we know, then the crop result is downscaled to the upload
+ * ceiling.
  */
 export async function applyCropToPhoto(
   photo: ScanPhoto,
@@ -38,11 +42,10 @@ export async function applyCropToPhoto(
   sourceSize: Size,
 ): Promise<ScanPhoto> {
   const source = cropSourceOf(photo);
-  const target = resizeTargetFor(sourceSize.width, sourceSize.height);
-  const context = ImageManipulator.manipulate(source.uri);
-  const base = await (target === null ? context : context.resize(target)).renderAsync();
-  const pixelRect = pixelCropRect(scaleRect(rect, sourceSize, base), base);
-  const cropped = await ImageManipulator.manipulate(base).crop(pixelRect).renderAsync();
+  const pixelRect = pixelCropRect(rect, sourceSize);
+  const target = resizeTargetFor(pixelRect.width, pixelRect.height);
+  const context = ImageManipulator.manipulate(source.uri).crop(pixelRect);
+  const cropped = await (target === null ? context : context.resize(target)).renderAsync();
   const saved = await cropped.saveAsync({ compress: CROP_JPEG_QUALITY, format: SaveFormat.JPEG });
   return {
     uri: saved.uri,
