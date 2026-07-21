@@ -248,13 +248,18 @@ export interface SaveReviewInput {
   scan: Scan;
   drafts: ReviewDraft[];
 }
-export async function saveReviewedCards(input: SaveReviewInput): Promise<{ created: number }>;
+export async function saveReviewedCards(
+  input: SaveReviewInput,
+): Promise<{ created: number; cardIds: string[] }>;
 ```
 
 `saveReviewedCards`: filter excluded drafts, `validateDrafts` (throw on problems), resolve
 lesson names to ids creating lessons as needed (case-insensitive name match against existing),
 insert cards (type, fields with note folded in, meaning, lesson_id, scan_id), mark the scan
-`reviewed`. `uploadScanPage`: read the local file (base64 via expo FileSystem or
+`reviewed`, return the inserted card ids. After a successful save the review editor kicks off
+best-effort background image generation for those ids (`generateImagesForCards` in
+`src/features/scan/generate-card-images.ts`: small concurrency pool, failures swallowed,
+card queries invalidated per finished image), skipped when `aiImagesEnabled` is off. `uploadScanPage`: read the local file (base64 via expo FileSystem or
 fetch+arrayBuffer), upload jpeg with contentType to `scans/${userId}/${makeStorageSlug()}.jpg`.
 
 ### src/lib/api.ts
@@ -310,9 +315,11 @@ output with the contract schema, persist `parsed_rows` + status `parsed`, return
 
 ### generate-card-image
 
-Request `{ cardId: string }`. Load card (404 if missing). Build prompt: "Simple flat
-illustration for a language learning flashcard: {meaning}. Friendly, minimal, soft warm
-colors, no text, no letters." Call fal.ai (`FAL_KEY`; model id from `FAL_MODEL`, default
+Request `{ cardId: string }`. Load card (404 if missing). Build prompt from the card's
+meaning: a charming minimalist flat vector illustration (one central subject, rounded
+geometric shapes, warm terracotta/amber/sage/cream palette, plain light background,
+generous negative space) with a hard no-text clause (no letters, numbers, labels,
+captions, typography, watermarks). Call fal.ai (`FAL_KEY`; model id from `FAL_MODEL`, default
 `fal-ai/flux/schnell`, endpoint `https://fal.run/{model}` with `{ prompt, image_size:
 'square_hd', num_images: 1 }`), download the resulting image, upload to
 `card-images/${userId}/${cardId}.jpg` with upsert, update `ai_image_path`, return `{ path }`.
@@ -333,7 +340,7 @@ colors, no text, no letters." Call fal.ai (`FAL_KEY`; model id from `FAL_MODEL`,
 | `src/app/quiz/session.tsx`     | Quiz runner + results.                                                                                                                                                                      |
 | `src/app/scan/new.tsx`         | Kind picker (three friendly cards explaining each layout), pick/take 1-2 photos in right-page-then-left-page order, reorder/remove, upload + parse with progress, then navigate to review.  |
 | `src/app/scan/import-pdf.tsx`  | Whole-book import: pick the curriculum PDF, upload, then drive `import-pdf-batch` one page batch at a time with progress, pause/resume, and a resumable cursor in `pdf_imports`.           |
-| `src/app/scan/[id]/review.tsx` | Review parsed rows: editable fields per FIELD_LABELS, meaning, per-row lesson assignment seeded from markers, bulk lesson set, exclude row, validation, save all.                           |
+| `src/app/scan/[id]/review.tsx` | Review parsed rows: editable fields per FIELD_LABELS, meaning, per-row lesson assignment seeded from markers, bulk lesson set, exclude row, validation, save all, then background image generation for the new cards. |
 | `src/app/lesson/[id].tsx`      | Cards in a lesson; rename/delete lesson.                                                                                                                                                    |
 | `src/app/card/[id].tsx`        | Card detail: edit fields + meaning, image section (preview, generate/regenerate, per-card toggle), SRS stats, reset progress, change lesson, delete.                                        |
 | `src/app/+not-found.tsx`       | Friendly fallback linking home.                                                                                                                                                             |

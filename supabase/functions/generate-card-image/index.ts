@@ -19,7 +19,14 @@ const falResponseSchema = z.object({
 });
 
 function buildPrompt(meaning: string): string {
-  return `Simple flat illustration for a language learning flashcard: ${meaning}. Friendly, minimal, soft warm colors, no text, no letters.`;
+  return [
+    `A charming minimalist flat illustration that visually depicts: "${meaning}".`,
+    'Modern flat vector style with one clear central subject, simple rounded geometric shapes,',
+    'a warm friendly palette of terracotta, amber, sage green and cream, soft ambient shadows,',
+    'and a clean plain light background with generous negative space.',
+    'Purely pictorial wordless imagery: absolutely no text, no letters, no numbers,',
+    'no labels, no captions, no typography, no watermarks, no writing of any kind.',
+  ].join(' ');
 }
 
 function mapFalError(status: number): HttpError {

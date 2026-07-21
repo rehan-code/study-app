@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { cardFromRow, type Card, type CardFields, type ScanKind } from '@/domain/cards';
 import {
   compareLessons,
@@ -294,7 +296,11 @@ async function resolveLessonIds(drafts: readonly ReviewDraft[]): Promise<Map<str
   return idsByKey;
 }
 
-export async function saveReviewedCards(input: SaveReviewInput): Promise<{ created: number }> {
+const insertedCardIdsSchema = z.array(z.object({ id: z.string() }));
+
+export async function saveReviewedCards(
+  input: SaveReviewInput,
+): Promise<{ created: number; cardIds: string[] }> {
   const included = input.drafts.filter((draft) => !draft.excluded);
   const problems = validateDrafts(included);
   if (problems.length > 0) {
@@ -322,11 +328,17 @@ export async function saveReviewedCards(input: SaveReviewInput): Promise<{ creat
   if (cleanupError !== null) {
     raise('save your cards', cleanupError);
   }
+  let cardIds: string[] = [];
   if (rows.length > 0) {
-    const { error } = await getSupabase().from('cards').insert(rows);
+    const { data, error } = await getSupabase().from('cards').insert(rows).select('id');
     if (error !== null) {
       raise('save your cards', error);
     }
+    const parsedIds = insertedCardIdsSchema.safeParse(data);
+    if (!parsedIds.success) {
+      raise('save your cards', { message: 'insert returned unexpected rows' });
+    }
+    cardIds = parsedIds.data.map((row) => row.id);
   }
   const { error: statusError } = await getSupabase()
     .from('scans')
@@ -335,7 +347,7 @@ export async function saveReviewedCards(input: SaveReviewInput): Promise<{ creat
   if (statusError !== null) {
     raise('finish the review', statusError);
   }
-  return { created: rows.length };
+  return { created: rows.length, cardIds };
 }
 
 /** Uploads a picked PDF into the scans bucket under the user's import folder. */
