@@ -6,6 +6,7 @@ import {
   pageLabelForIndex,
   remainingPhotoSlots,
   removePhotoAt,
+  replacePhotoAt,
   swapPhotos,
   type ScanPhoto,
 } from '@/features/scan/photo-selection';
@@ -47,6 +48,18 @@ describe('removePhotoAt', () => {
 
   it('ignores out-of-range indexes', () => {
     expect(removePhotoAt([right], 5)).toEqual([right]);
+  });
+});
+
+describe('replacePhotoAt', () => {
+  it('replaces by index without mutating the input', () => {
+    const current = [right, left];
+    expect(replacePhotoAt(current, 1, extra)).toEqual([right, extra]);
+    expect(current).toEqual([right, left]);
+  });
+
+  it('ignores out-of-range indexes', () => {
+    expect(replacePhotoAt([right], 5, extra)).toEqual([right]);
   });
 });
 

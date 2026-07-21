@@ -1,3 +1,5 @@
+import type { CropRect } from '@/features/scan/crop-geometry';
+
 export const MAX_SCAN_PAGES = 2;
 
 export interface ScanPhoto {
@@ -5,6 +7,10 @@ export interface ScanPhoto {
   /** Decoded dimensions from the picker; missing or zero when unreported. */
   width?: number;
   height?: number;
+  /** Pre-crop source, kept so a crop can be re-adjusted instead of compounded. */
+  original?: { uri: string; width: number; height: number };
+  /** Applied crop in `original` pixel coordinates. */
+  cropRect?: CropRect;
 }
 
 const PAGE_ORDER_LABELS = ['Right page', 'Left page'] as const;
@@ -29,6 +35,14 @@ export function addPhotos(
 
 export function removePhotoAt(current: readonly ScanPhoto[], index: number): ScanPhoto[] {
   return current.filter((_, i) => i !== index);
+}
+
+export function replacePhotoAt(
+  current: readonly ScanPhoto[],
+  index: number,
+  photo: ScanPhoto,
+): ScanPhoto[] {
+  return current.map((existing, i) => (i === index ? photo : existing));
 }
 
 /** Reverses the right/left page order; only meaningful for a full pair. */

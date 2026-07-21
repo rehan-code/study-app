@@ -11,12 +11,14 @@ import { Screen } from '@/components/screen';
 import { Surface } from '@/components/surface';
 import { Radius, Spacing } from '@/constants/theme';
 import type { ScanKind } from '@/domain/cards';
+import { PhotoCropEditor } from '@/features/scan/photo-crop-editor';
 import {
   addPhotos,
   MAX_SCAN_PAGES,
   pageLabelForIndex,
   remainingPhotoSlots,
   removePhotoAt,
+  replacePhotoAt,
   swapPhotos,
   type ScanPhoto,
 } from '@/features/scan/photo-selection';
@@ -80,7 +82,9 @@ function PhotosStep({ info, photos, onPhotosChange, onSubmit }: PhotosStepProps)
   const theme = useTheme();
   const [picking, setPicking] = useState(false);
   const [pickerError, setPickerError] = useState<string | null>(null);
+  const [cropIndex, setCropIndex] = useState<number | null>(null);
   const remaining = remainingPhotoSlots(photos);
+  const croppingPhoto = cropIndex === null ? undefined : photos[cropIndex];
   const pageLabels = info.pages.map((page) => page.label);
 
   const takePhoto = async () => {
@@ -176,15 +180,26 @@ function PhotosStep({ info, photos, onPhotosChange, onSubmit }: PhotosStepProps)
                   </Text>
                 )}
               </View>
-              <IconButton
-                icon="xmark"
-                accessibilityLabel={`Remove ${pageLabelForIndex(index, pageLabels)}`}
-                size={16}
-                themeColor="textSecondary"
-                onPress={() => {
-                  onPhotosChange(removePhotoAt(photos, index));
-                }}
-              />
+              <View style={styles.photoActions}>
+                <IconButton
+                  icon="crop"
+                  accessibilityLabel={`Crop ${pageLabelForIndex(index, pageLabels)}`}
+                  size={16}
+                  themeColor="textSecondary"
+                  onPress={() => {
+                    setCropIndex(index);
+                  }}
+                />
+                <IconButton
+                  icon="xmark"
+                  accessibilityLabel={`Remove ${pageLabelForIndex(index, pageLabels)}`}
+                  size={16}
+                  themeColor="textSecondary"
+                  onPress={() => {
+                    onPhotosChange(removePhotoAt(photos, index));
+                  }}
+                />
+              </View>
             </View>
           </Surface>
         ))}
@@ -233,6 +248,18 @@ function PhotosStep({ info, photos, onPhotosChange, onSubmit }: PhotosStepProps)
           onPress={onSubmit}
         />
       </View>
+      {cropIndex !== null && croppingPhoto !== undefined && (
+        <PhotoCropEditor
+          photo={croppingPhoto}
+          onCancel={() => {
+            setCropIndex(null);
+          }}
+          onDone={(next) => {
+            onPhotosChange(replacePhotoAt(photos, cropIndex, next));
+            setCropIndex(null);
+          }}
+        />
+      )}
     </View>
   );
 }
@@ -410,6 +437,10 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     fontWeight: 500,
+  },
+  photoActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   pickButtons: {
     flexDirection: 'row',
