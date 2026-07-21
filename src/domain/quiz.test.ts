@@ -290,6 +290,31 @@ describe('buildQuiz meaning questions', () => {
     }
   });
 
+  it('prefers meanings of words that look like the prompt word', () => {
+    // Four short words are confusable with بيت; مدرسة and مستشفى are not.
+    const bayt = vocabCard('n-bayt2', 'بَيْت', 'House');
+    const lookalikes = [
+      vocabCard('n-bint', 'بِنْت', 'Girl'),
+      vocabCard('n-zayt', 'زَيْت', 'Oil'),
+      vocabCard('n-sawt', 'صَوْت', 'Voice'),
+      vocabCard('n-waqt', 'وَقْت', 'Time'),
+      vocabCard('n-sayyara', 'سَيَّارَة', 'Car'),
+    ];
+    const unrelated = [
+      vocabCard('n-madrasa', 'مَدْرَسَة', 'School'),
+      vocabCard('n-mustashfa', 'مُسْتَشْفَى', 'Hospital'),
+    ];
+    const cards = [bayt, ...lookalikes, ...unrelated];
+    for (const seed of [1, 2, 3, 17, 99]) {
+      const questions = buildQuiz(cards, { count: 8, kinds: ['meaning'], rng: mulberry32(seed) });
+      const forBayt = questions.find((question) => question.cardId === 'n-bayt2');
+      expect(forBayt).toBeDefined();
+      expect(forBayt?.choices).toContain('House');
+      expect(forBayt?.choices).not.toContain('School');
+      expect(forBayt?.choices).not.toContain('Hospital');
+    }
+  });
+
   it('excludes distractors identical to the correct meaning', () => {
     const left = vocabCard('n-left', 'يَسَارٌ', 'Side');
     const right = vocabCard('n-right', 'يَمِينٌ', 'Side');
@@ -356,6 +381,29 @@ describe('buildQuiz plural questions', () => {
     });
     const ids = questions.map((question) => question.cardId).sort();
     expect(ids).toEqual(['n-bab', 'n-bayt']);
+  });
+
+  it('prefers distractors on the same pattern as the correct plural', () => {
+    // Five plurals share the أفعال pattern with أبواب; three are فعول.
+    const sameWazn = [
+      pluralCard('n-qalam', 'قَلَم', 'Pen', 'أَقْلَام'),
+      pluralCard('n-walad', 'وَلَد', 'Boy', 'أَوْلَاد'),
+      pluralCard('n-lawn', 'لَوْن', 'Color', 'أَلْوَان'),
+      pluralCard('n-burj', 'بُرْج', 'Tower', 'أَبْرَاج'),
+      pluralCard('n-nahr', 'نَهْر', 'River', 'أَنْهَار'),
+    ];
+    const otherWazn = [bayt, qalb, pluralCard('n-ayn', 'عَيْن', 'Eye', 'عُيُون')];
+    const cards = [bab, ...sameWazn, ...otherWazn];
+    const rejected = new Set(['بُيُوت', 'قُلُوب', 'عُيُون']);
+    for (const seed of [1, 2, 3, 17, 99]) {
+      const questions = buildQuiz(cards, { count: 9, kinds: ['plural'], rng: mulberry32(seed) });
+      const forBab = questions.find((question) => question.cardId === 'n-bab');
+      expect(forBab).toBeDefined();
+      expect(forBab?.choices).toHaveLength(4);
+      for (const choice of forBab?.choices ?? []) {
+        expect(rejected.has(choice)).toBe(false);
+      }
+    }
   });
 });
 
