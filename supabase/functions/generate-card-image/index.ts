@@ -1,11 +1,20 @@
 import { z } from 'npm:zod@4';
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 
-import { errorResponse, handleOptions, HttpError, jsonResponse } from '../_shared/http.ts';
+import {
+  errorResponse,
+  fetchWithTimeout,
+  handleOptions,
+  HttpError,
+  jsonResponse,
+} from '../_shared/http.ts';
 import { clientFromRequest } from '../_shared/supabase.ts';
 
 const DEFAULT_FAL_MODEL = 'fal-ai/flux/schnell';
 const CARD_IMAGES_BUCKET = 'card-images';
+// Never await fal.ai indefinitely; a hung call should fail this request
+// instead of holding the function until the runtime kills it.
+const FAL_TIMEOUT_MS = 120_000;
 
 const requestSchema = z.object({ cardId: z.uuid() });
 
@@ -38,18 +47,23 @@ async function generateImageBytes(meaning: string): Promise<ArrayBuffer> {
     throw new HttpError("Image generation isn't set up yet. Add the FAL_KEY secret.", 500);
   }
   const model = Deno.env.get('FAL_MODEL') ?? DEFAULT_FAL_MODEL;
-  const response = await fetch(`https://fal.run/${model}`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Key ${falKey}`,
-      'Content-Type': 'application/json',
+  const response = await fetchWithTimeout(
+    `https://fal.run/${model}`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Key ${falKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        prompt: buildPrompt(meaning),
+        image_size: 'square_hd',
+        num_images: 1,
+      }),
     },
-    body: JSON.stringify({
-      prompt: buildPrompt(meaning),
-      image_size: 'square_hd',
-      num_images: 1,
-    }),
-  });
+    FAL_TIMEOUT_MS,
+    new HttpError('The image service took too long. Try again.', 504),
+  );
   if (!response.ok) {
     console.error('generate-card-image: fal.ai error', {
       status: response.status,
@@ -66,7 +80,12 @@ async function generateImageBytes(meaning: string): Promise<ArrayBuffer> {
   if (!first) {
     throw new HttpError("Couldn't generate an image. Try again.", 502);
   }
-  const imageResponse = await fetch(first.url);
+  const imageResponse = await fetchWithTimeout(
+    first.url,
+    {},
+    FAL_TIMEOUT_MS,
+    new HttpError("Couldn't download the generated image. Try again.", 504),
+  );
   if (!imageResponse.ok) {
     console.error('generate-card-image: image download failed', { status: imageResponse.status });
     throw new HttpError("Couldn't download the generated image. Try again.", 502);

@@ -28,6 +28,30 @@ export function errorResponse(message: string, status: number): Response {
   return jsonResponse({ error: message }, status);
 }
 
+/**
+ * fetch with a hard deadline. An edge function must never await an outbound
+ * call indefinitely: if the runtime kills the function mid-request, any
+ * status row it set beforehand stays stranded in its transient state. On
+ * timeout the given HttpError is thrown so each caller surfaces a message
+ * that fits its flow.
+ */
+export async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  timeoutError: HttpError,
+): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'TimeoutError') {
+      console.error('outbound request timed out', { url, timeoutMs });
+      throw timeoutError;
+    }
+    throw error;
+  }
+}
+
 /** Returns the CORS preflight response, or null when the request is not OPTIONS. */
 export function handleOptions(req: Request): Response | null {
   if (req.method === 'OPTIONS') {

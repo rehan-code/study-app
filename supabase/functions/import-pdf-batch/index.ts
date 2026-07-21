@@ -2,7 +2,13 @@ import { z } from 'npm:zod@4';
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import { getDocumentProxy } from 'npm:unpdf@1.6.2';
 
-import { errorResponse, handleOptions, HttpError, jsonResponse } from '../_shared/http.ts';
+import {
+  errorResponse,
+  fetchWithTimeout,
+  handleOptions,
+  HttpError,
+  jsonResponse,
+} from '../_shared/http.ts';
 import { clientFromRequest } from '../_shared/supabase.ts';
 import { PARSED_FIELD_KEYS, type ScanKind } from '../_shared/parsed-scan-contract.ts';
 
@@ -11,6 +17,9 @@ const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_MODEL = 'claude-sonnet-5';
 const MAX_OUTPUT_TOKENS = 16000;
 const TOOL_NAME = 'record_imported_pages';
+// Aborts well before the edge runtime's wall clock limit kills the function,
+// so a hung Anthropic call fails the batch cleanly and the import can resume.
+const ANTHROPIC_TIMEOUT_MS = 240_000;
 
 /**
  * Pages per Claude call. Six covers roughly one lesson (text, nouns spread,
@@ -159,7 +168,14 @@ function buildToolInputSchema(): Record<string, unknown> {
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['lessonNumber', 'title', 'continuesPreviousBatch', 'nouns', 'verbs', 'phrases'],
+          required: [
+            'lessonNumber',
+            'title',
+            'continuesPreviousBatch',
+            'nouns',
+            'verbs',
+            'phrases',
+          ],
           properties: {
             lessonNumber: { type: ['integer', 'null'], minimum: 1 },
             title: { type: 'string' },
@@ -222,35 +238,40 @@ async function requestParseFromClaude(
     throw new HttpError("AI parsing isn't set up yet. Add the ANTHROPIC_API_KEY secret.", 500);
   }
   const model = Deno.env.get('ANTHROPIC_MODEL') ?? DEFAULT_MODEL;
-  const response = await fetch(ANTHROPIC_URL, {
-    method: 'POST',
-    headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': ANTHROPIC_VERSION,
-      'Content-Type': 'application/json',
+  const response = await fetchWithTimeout(
+    ANTHROPIC_URL,
+    {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': ANTHROPIC_VERSION,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: MAX_OUTPUT_TOKENS,
+        tools: [
+          {
+            name: TOOL_NAME,
+            description: 'Record the structured vocabulary extracted from these book pages.',
+            input_schema: buildToolInputSchema(),
+          },
+        ],
+        tool_choice: { type: 'tool', name: TOOL_NAME },
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: serializedPages },
+              { type: 'text', text: buildInstruction(currentLesson) },
+            ],
+          },
+        ],
+      }),
     },
-    body: JSON.stringify({
-      model,
-      max_tokens: MAX_OUTPUT_TOKENS,
-      tools: [
-        {
-          name: TOOL_NAME,
-          description: 'Record the structured vocabulary extracted from these book pages.',
-          input_schema: buildToolInputSchema(),
-        },
-      ],
-      tool_choice: { type: 'tool', name: TOOL_NAME },
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: serializedPages },
-            { type: 'text', text: buildInstruction(currentLesson) },
-          ],
-        },
-      ],
-    }),
-  });
+    ANTHROPIC_TIMEOUT_MS,
+    new HttpError('The AI took too long to read these pages. Resume to retry this batch.', 504),
+  );
   const bodyText = await response.text();
   if (!response.ok) {
     console.error('import-pdf-batch: Anthropic error', { status: response.status, body: bodyText });
@@ -404,7 +425,9 @@ Deno.serve(async (req) => {
 
   const { data: importRow, error: importError } = await supabase
     .from('pdf_imports')
-    .select('id, storage_path, status, total_pages, next_page, current_lesson, lessons_created, cards_created')
+    .select(
+      'id, storage_path, status, total_pages, next_page, current_lesson, lessons_created, cards_created',
+    )
     .eq('id', importId)
     .maybeSingle();
   if (importError) {
@@ -440,10 +463,7 @@ Deno.serve(async (req) => {
       throw new HttpError('This import is already past the last page.', 409);
     }
 
-    const toolInput = await requestParseFromClaude(
-      serializePages(pages),
-      current.current_lesson,
-    );
+    const toolInput = await requestParseFromClaude(serializePages(pages), current.current_lesson);
     const validated = importedPagesSchema.safeParse(toolInput);
     if (!validated.success) {
       console.error('import-pdf-batch: tool output failed validation', validated.error);
