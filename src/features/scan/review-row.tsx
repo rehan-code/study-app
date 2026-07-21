@@ -9,6 +9,7 @@ import { TextField } from '@/components/text-field';
 import { Spacing } from '@/constants/theme';
 import { FIELD_LABELS } from '@/domain/cards';
 import type { ReviewDraft } from '@/domain/scan-review';
+import { CorrectionOptions } from '@/features/scan/correction-options';
 import {
   headlineErrorMessage,
   headlineFieldKey,
@@ -82,22 +83,35 @@ export function ReviewRow({
         <View style={styles.fields}>
           {FIELD_LABELS[draft.type]
             .filter((field) => field.key !== 'note')
-            .map((field) => (
-              <TextField
-                key={field.key}
-                label={`${field.label} · ${field.labelArabic}`}
-                value={draft.fields[field.key] ?? ''}
-                rtl
-                error={
-                  field.key === headlineKey && errors?.headline
-                    ? headlineErrorMessage(draft.type)
-                    : undefined
-                }
-                onChangeText={(value) => {
-                  onFieldChange(field.key, value);
-                }}
-              />
-            ))}
+            .map((field) => {
+              const correction = draft.corrections.find((entry) => entry.field === field.key);
+              return (
+                <View key={field.key} style={styles.fieldGroup}>
+                  <TextField
+                    label={`${field.label} · ${field.labelArabic}`}
+                    value={draft.fields[field.key] ?? ''}
+                    rtl
+                    error={
+                      field.key === headlineKey && errors?.headline
+                        ? headlineErrorMessage(draft.type)
+                        : undefined
+                    }
+                    onChangeText={(value) => {
+                      onFieldChange(field.key, value);
+                    }}
+                  />
+                  {correction !== undefined && (
+                    <CorrectionOptions
+                      correction={correction}
+                      value={draft.fields[field.key] ?? ''}
+                      onSelect={(value) => {
+                        onFieldChange(field.key, value);
+                      }}
+                    />
+                  )}
+                </View>
+              );
+            })}
           <TextField
             label="Meaning"
             value={draft.meaning}
@@ -139,6 +153,9 @@ const styles = StyleSheet.create({
   },
   fields: {
     marginTop: Spacing.two,
+    gap: Spacing.two,
+  },
+  fieldGroup: {
     gap: Spacing.two,
   },
   skippedRow: {

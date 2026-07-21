@@ -133,6 +133,12 @@ eligible cards than `count`, return as many as possible. Deterministic given the
 ### src/domain/scan-review.ts (to implement)
 
 ```ts
+export interface DraftCorrection {
+  field: string; // key per PARSED_FIELD_KEYS
+  scanned: string; // exactly what the page says
+  suggested: string; // the checked, corrected form
+  reason: string; // short English explanation
+}
 export interface ReviewDraft {
   key: string; // stable row key, e.g. "row-3"
   type: CardType;
@@ -141,6 +147,7 @@ export interface ReviewDraft {
   note: string | null;
   lessonName: string | null;
   excluded: boolean; // user removed this row in review
+  corrections: DraftCorrection[]; // flagged answers; fields default to suggested
 }
 export function parsedToDrafts(
   kind: ScanKind,
@@ -164,6 +171,11 @@ Rules: `parsedToDrafts` drops blank rows (all fields null/empty AND meaning null
 lesson markers (rows before the first marker get `fallbackLessonName`, rows at/after a
 marker get that marker's name, markers apply in `beforeRow` order), folds `note` into the
 draft, and normalizes marker names to "Lesson N" form when they match /lesson\s*(\d+)/i.
+It also applies the parser's per-row corrections: a flagged field's working value defaults
+to the SUGGESTED form while the exact transcription is kept in the draft's `corrections`
+(one per field, first wins; corrections aimed at unknown fields, blank/dash cells, or
+that do not change the page value are dropped). The review UI renders both versions under
+the field so the user can tap between the suggested fix and what the page says.
 `draftToCardSeed` merges the note into fields and validates through the card field schemas
 (throws ZodError on invalid; UI calls `validateDrafts` first to block save with friendly
 messages). Excluded drafts are the caller's job to filter.
@@ -288,7 +300,11 @@ contract. The prompt must encode docs/SCAN_FORMATS.md: spreads merge row-by-row 
 photos in order, field keys per kind exactly as in `PARSED_FIELD_KEYS`, meaning in English,
 preserve harakat exactly, blank/dash cells null, detect handwritten LESSON markers between
 rows into `lessonMarkers` (beforeRow = index of the first row at/after the marker), ignore
-the watermark, margin notes into `note`, uncertainties into `warnings`. Validate the tool
+the watermark, margin notes into `note`, uncertainties into `warnings`. The prompt also
+asks the model to CHECK each filled-in answer (right plural/conjugation/masdar/participle,
+right harakat) and report confident mistakes per row in `corrections` as
+`{ field, suggested, reason }`; `fields` still carries the exact transcription, and
+unreadable cells go to `warnings`, never `corrections`. Validate the tool
 output with the contract schema, persist `parsed_rows` + status `parsed`, return
 `{ parsed }`. On failure persist status `failed` + `parse_error` and return the error.
 

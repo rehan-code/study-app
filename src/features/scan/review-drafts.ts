@@ -1,5 +1,5 @@
 import { FIELD_LABELS, type CardType } from '@/domain/cards';
-import type { DraftValidation, ReviewDraft } from '@/domain/scan-review';
+import type { DraftCorrection, DraftValidation, ReviewDraft } from '@/domain/scan-review';
 
 /** The first field of every card type is its required Arabic headline. */
 export function headlineFieldKey(type: CardType): string {
@@ -132,6 +132,32 @@ export function clearFieldError(
     delete next[key];
   }
   return next;
+}
+
+/** Which of a flagged field's versions the current value matches. */
+export type CorrectionChoice = 'suggested' | 'scanned' | 'custom';
+
+export function correctionChoice(value: string, correction: DraftCorrection): CorrectionChoice {
+  const trimmed = value.trim();
+  if (trimmed === correction.suggested.trim()) {
+    return 'suggested';
+  }
+  if (trimmed === correction.scanned.trim()) {
+    return 'scanned';
+  }
+  return 'custom';
+}
+
+/** Flagged answers across the rows that will actually be saved. */
+export function correctionCount(drafts: readonly ReviewDraft[]): number {
+  return drafts.reduce((sum, draft) => (draft.excluded ? sum : sum + draft.corrections.length), 0);
+}
+
+export function correctionSummaryMessage(count: number): string {
+  if (count === 1) {
+    return '1 answer on the page looks like a mistake. The correction is filled in; the flagged field also shows what was written.';
+  }
+  return `${count} answers on the page look like mistakes. Corrections are filled in; flagged fields also show what was written.`;
 }
 
 /** Lesson names the drafts reference, deduplicated case-insensitively, first casing wins. */

@@ -80,7 +80,7 @@ function buildToolInputSchema(kind: ScanKind): Record<string, unknown> {
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['fields', 'meaning', 'note'],
+          required: ['fields', 'meaning', 'note', 'corrections'],
           properties: {
             fields: {
               type: 'object',
@@ -90,6 +90,19 @@ function buildToolInputSchema(kind: ScanKind): Record<string, unknown> {
             },
             meaning: { type: ['string', 'null'] },
             note: { type: ['string', 'null'] },
+            corrections: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['field', 'suggested', 'reason'],
+                properties: {
+                  field: { type: 'string', enum: keys },
+                  suggested: { type: 'string' },
+                  reason: { type: 'string' },
+                },
+              },
+            },
           },
         },
       },
@@ -143,6 +156,16 @@ const PARSE_RULES = [
   '- Emit rows in top to bottom order starting at index 0. Include every row that has any handwriting; skip rows that are completely empty.',
 ].join('\n');
 
+const CHECK_RULES = [
+  'Checking the answers:',
+  '- The handwriting is student homework and can contain mistakes. After transcribing, check every filled-in Arabic cell the way a strict Arabic teacher would: is it the correct standard form for its column (the right plural, conjugation, imperative, masdar, participle), written with the right harakat?',
+  '- When a cell is genuinely wrong, add an entry to that row\'s "corrections": "field" is the field key, "suggested" is the correct fully vocalized form, and "reason" is one short English sentence explaining the mistake.',
+  '- Even when a cell is wrong, "fields" MUST still contain exactly what is written on the page. The corrected form appears ONLY in "corrections". Never silently fix the transcription.',
+  '- Only flag mistakes you are confident about. Valid alternatives (a second acceptable plural, an alternative masdar, accepted hamza spelling variants) are NOT mistakes. If you cannot read a cell well enough to judge it, use "warnings" instead of "corrections".',
+  '- Never flag a blank or "-" cell; leaving a cell empty is always allowed.',
+  '- A row with no mistakes has an empty "corrections" array.',
+].join('\n');
+
 function buildInstruction(kind: ScanKind, pageCount: number): string {
   const merge =
     pageCount === 2
@@ -153,6 +176,7 @@ function buildInstruction(kind: ScanKind, pageCount: number): string {
     merge,
     COLUMN_GUIDES[kind],
     PARSE_RULES,
+    CHECK_RULES,
     `Call the ${TOOL_NAME} tool exactly once with the complete result.`,
   ].join('\n\n');
 }
@@ -250,7 +274,21 @@ function normalizeParsed(kind: ScanKind, raw: unknown): ParsedScan {
     for (const key of keys) {
       fields[key] = row.fields[key] ?? null;
     }
-    return { ...row, fields };
+    // Keep only corrections that actually change a filled-in cell of this kind.
+    const flagged = new Set<string>();
+    const corrections = row.corrections.filter((correction) => {
+      if (!keys.includes(correction.field) || flagged.has(correction.field)) {
+        return false;
+      }
+      const scanned = fields[correction.field]?.trim() ?? '';
+      const suggested = correction.suggested.trim();
+      if (scanned === '' || scanned === '-' || suggested === '' || suggested === scanned) {
+        return false;
+      }
+      flagged.add(correction.field);
+      return true;
+    });
+    return { ...row, fields, corrections };
   });
   return { ...validated.data, rows };
 }

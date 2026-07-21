@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { ZodError } from 'zod';
 
-import { PARSED_FIELD_KEYS, type ParsedRow, type ParsedScan } from '@/domain/parsed-scan';
+import {
+  PARSED_FIELD_KEYS,
+  type ParsedRow,
+  type ParsedScan,
+  type RowCorrection,
+} from '@/domain/parsed-scan';
 import {
   draftToCardSeed,
   isBlankRow,
@@ -14,8 +19,9 @@ function verbRow(
   fields: Record<string, string | null>,
   meaning: string | null,
   note: string | null = null,
+  corrections: RowCorrection[] = [],
 ): ParsedRow {
-  return { fields, meaning, note };
+  return { fields, meaning, note, corrections };
 }
 
 const BLANK_ROW: ParsedRow = verbRow({ past: null, present: null, masdar: null }, null);
@@ -85,6 +91,7 @@ function draft(overrides: Partial<ReviewDraft> = {}): ReviewDraft {
     note: null,
     lessonName: 'Lesson 9',
     excluded: false,
+    corrections: [],
     ...overrides,
   };
 }
@@ -251,6 +258,101 @@ describe('parsedToDrafts', () => {
     it('passes the fallback lesson name through unnormalized', () => {
       const drafts = parsedToDrafts('verbs', verbsScan(), 'lesson 3');
       expect(drafts[0].lessonName).toBe('lesson 3');
+    });
+  });
+
+  describe('corrections', () => {
+    const wrongPresent = { ...verbsScan().rows[0].fields, present: 'يَتَّصَلُ' };
+
+    it('defaults a flagged field to the checked form and keeps what the page says', () => {
+      const scan = verbsScan({
+        rows: [
+          verbRow(wrongPresent, 'To call', null, [
+            {
+              field: 'present',
+              suggested: 'يَتَّصِلُ',
+              reason: 'The middle radical takes kasra in the present tense.',
+            },
+          ]),
+        ],
+      });
+      const drafts = parsedToDrafts('verbs', scan, null);
+      expect(drafts[0].fields.present).toBe('يَتَّصِلُ');
+      expect(drafts[0].corrections).toEqual([
+        {
+          field: 'present',
+          scanned: 'يَتَّصَلُ',
+          suggested: 'يَتَّصِلُ',
+          reason: 'The middle radical takes kasra in the present tense.',
+        },
+      ]);
+    });
+
+    it('ignores corrections for fields the kind does not have', () => {
+      const scan = verbsScan({
+        rows: [
+          verbRow(wrongPresent, 'To call', null, [
+            { field: 'plural1', suggested: 'أَسَابِيعُ', reason: 'Wrong plural.' },
+          ]),
+        ],
+      });
+      const drafts = parsedToDrafts('verbs', scan, null);
+      expect(drafts[0].corrections).toEqual([]);
+      expect(drafts[0].fields.present).toBe('يَتَّصَلُ');
+    });
+
+    it('ignores corrections aimed at blank or dash cells', () => {
+      const scan = verbsScan({
+        rows: [
+          verbRow({ ...wrongPresent, imperative: '-', masdar: null }, 'To call', null, [
+            { field: 'imperative', suggested: 'اِتَّصِلْ', reason: 'Missing imperative.' },
+            { field: 'masdar', suggested: 'اِتِّصَال', reason: 'Missing masdar.' },
+          ]),
+        ],
+      });
+      const drafts = parsedToDrafts('verbs', scan, null);
+      expect(drafts[0].corrections).toEqual([]);
+      expect(drafts[0].fields.imperative).toBe('-');
+      expect(drafts[0].fields.masdar).toBeNull();
+    });
+
+    it('ignores corrections that do not change the page value', () => {
+      const scan = verbsScan({
+        rows: [
+          verbRow(wrongPresent, 'To call', null, [
+            { field: 'present', suggested: ' يَتَّصَلُ ', reason: 'No real change.' },
+          ]),
+        ],
+      });
+      const drafts = parsedToDrafts('verbs', scan, null);
+      expect(drafts[0].corrections).toEqual([]);
+      expect(drafts[0].fields.present).toBe('يَتَّصَلُ');
+    });
+
+    it('keeps only the first correction per field', () => {
+      const scan = verbsScan({
+        rows: [
+          verbRow(wrongPresent, 'To call', null, [
+            { field: 'present', suggested: 'يَتَّصِلُ', reason: 'First.' },
+            { field: 'present', suggested: 'يَتَواصَلُ', reason: 'Second.' },
+          ]),
+        ],
+      });
+      const drafts = parsedToDrafts('verbs', scan, null);
+      expect(drafts[0].corrections).toHaveLength(1);
+      expect(drafts[0].fields.present).toBe('يَتَّصِلُ');
+    });
+
+    it('feeds the checked form into card seeds unless the user changes it', () => {
+      const scan = verbsScan({
+        rows: [
+          verbRow(wrongPresent, 'To call', null, [
+            { field: 'present', suggested: 'يَتَّصِلُ', reason: 'Kasra, not fatha.' },
+          ]),
+        ],
+      });
+      const seeds = parsedToDrafts('verbs', scan, null).map(draftToCardSeed);
+      expect(seeds[0].fields).toMatchObject({ present: 'يَتَّصِلُ' });
     });
   });
 });

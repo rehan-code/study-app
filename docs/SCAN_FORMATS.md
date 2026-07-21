@@ -58,8 +58,12 @@ Arabic phrase plus English meaning per row.
 `parse-scan` edge function sends the page photo(s) to Claude vision in one
 request and asks for strict JSON: ordered rows with per-column strings
 (preserving harakat exactly), plus detected lesson markers with the row index
-they precede. Output lands in `scans.parsed_rows`; the review screen lets the
-user fix any cell and confirm lesson assignment before cards are created.
+they precede. The answers are student homework, so the same request also checks
+each filled-in cell for genuine mistakes (wrong plural, wrong conjugation,
+wrong harakat) and reports them per row as corrections without touching the
+transcription. Output lands in `scans.parsed_rows`; the review screen lets the
+user fix any cell and confirm lesson assignment before cards are created, with
+flagged cells defaulting to the corrected form and offering what the page says.
 
 ## Book PDF import
 

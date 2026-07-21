@@ -24,10 +24,23 @@ export const PARSED_FIELD_KEYS: Record<ScanKind, readonly string[]> = {
   phrases: ['arabic'],
 };
 
+/**
+ * A suspected mistake in a handwritten answer. "fields" always keeps the exact
+ * transcription; the checked, corrected form lives only here so review can
+ * offer both and default to the correction.
+ */
+export const rowCorrectionSchema = z.object({
+  field: z.string().min(1),
+  suggested: z.string().min(1),
+  reason: z.string().min(1),
+});
+
 export const parsedRowSchema = z.object({
   fields: z.record(z.string(), z.string().nullable()),
   meaning: z.string().nullable(),
   note: z.string().nullable(),
+  // Scans parsed before answer checking existed have no corrections key.
+  corrections: z.array(rowCorrectionSchema).default([]),
 });
 
 /** A handwritten "LESSON N" marker; rows from beforeRow onward belong to that lesson. */
@@ -43,6 +56,7 @@ export const parsedScanSchema = z.object({
   warnings: z.array(z.string()),
 });
 
+export type RowCorrection = z.infer<typeof rowCorrectionSchema>;
 export type ParsedRow = z.infer<typeof parsedRowSchema>;
 export type LessonMarker = z.infer<typeof lessonMarkerSchema>;
 export type ParsedScan = z.infer<typeof parsedScanSchema>;

@@ -6,6 +6,7 @@ import {
   PARSED_FIELD_KEYS,
   parsedRowSchema,
   parsedScanSchema,
+  rowCorrectionSchema,
 } from '@/domain/parsed-scan';
 
 const validParsed = {
@@ -93,6 +94,51 @@ describe('parsedRowSchema', () => {
 
   it('rejects rows missing the note property', () => {
     expect(parsedRowSchema.safeParse({ fields: {}, meaning: null }).success).toBe(false);
+  });
+
+  it('defaults corrections to an empty array for rows parsed before checking existed', () => {
+    const row = parsedRowSchema.parse({
+      fields: { past: 'اِتَّصَلَ' },
+      meaning: 'To call',
+      note: null,
+    });
+    expect(row.corrections).toEqual([]);
+  });
+
+  it('accepts a row with a correction', () => {
+    const row = parsedRowSchema.parse({
+      fields: { present: 'يَتَّصَلُ' },
+      meaning: 'To call',
+      note: null,
+      corrections: [
+        {
+          field: 'present',
+          suggested: 'يَتَّصِلُ',
+          reason: 'The middle radical takes kasra in the present tense.',
+        },
+      ],
+    });
+    expect(row.corrections[0].suggested).toBe('يَتَّصِلُ');
+  });
+});
+
+describe('rowCorrectionSchema', () => {
+  it('requires a field, a suggested form, and a reason', () => {
+    expect(
+      rowCorrectionSchema.safeParse({ field: 'present', suggested: 'يَتَّصِلُ', reason: 'Kasra.' })
+        .success,
+    ).toBe(true);
+    expect(
+      rowCorrectionSchema.safeParse({ field: '', suggested: 'يَتَّصِلُ', reason: 'Kasra.' })
+        .success,
+    ).toBe(false);
+    expect(
+      rowCorrectionSchema.safeParse({ field: 'present', suggested: '', reason: 'Kasra.' }).success,
+    ).toBe(false);
+    expect(
+      rowCorrectionSchema.safeParse({ field: 'present', suggested: 'يَتَّصِلُ', reason: '' })
+        .success,
+    ).toBe(false);
   });
 });
 

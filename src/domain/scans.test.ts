@@ -33,7 +33,11 @@ describe('scanFromRow', () => {
     expect(scan.kind).toBe('verbs');
     expect(scan.pagePaths).toEqual(['user-1/right.jpg', 'user-1/left.jpg']);
     expect(scan.status).toBe('parsed');
-    expect(scan.parsed).toEqual(parsedPayload);
+    // Rows stored before answer checking existed gain an empty corrections list.
+    expect(scan.parsed).toEqual({
+      ...parsedPayload,
+      rows: [{ ...parsedPayload.rows[0], corrections: [] }],
+    });
     expect(scan.parseError).toBeNull();
     expect(scan.createdAt).toEqual(new Date('2026-07-06T10:00:00.000Z'));
   });

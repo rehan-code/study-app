@@ -12,6 +12,14 @@ import {
   type ParsedScan,
 } from '@/domain/parsed-scan';
 
+/** A flagged answer: what the page says versus the checked, corrected form. */
+export interface DraftCorrection {
+  field: string;
+  scanned: string;
+  suggested: string;
+  reason: string;
+}
+
 export interface ReviewDraft {
   key: string;
   type: CardType;
@@ -20,6 +28,7 @@ export interface ReviewDraft {
   note: string | null;
   lessonName: string | null;
   excluded: boolean;
+  corrections: DraftCorrection[];
 }
 
 const LESSON_NUMBER_PATTERN = /lesson\s*(\d+)/i;
@@ -80,6 +89,26 @@ export function parsedToDrafts(
     for (const key of keys) {
       fields[key] = row.fields[key] ?? null;
     }
+    // The checked form wins by default; the review UI offers the scanned form.
+    const corrections: DraftCorrection[] = [];
+    for (const correction of row.corrections) {
+      const scanned = fields[correction.field];
+      const suggested = correction.suggested.trim();
+      if (!keys.includes(correction.field)) {
+        continue;
+      }
+      if (corrections.some((entry) => entry.field === correction.field)) {
+        continue;
+      }
+      if (scanned === null || isBlankCell(scanned)) {
+        continue;
+      }
+      if (suggested === '' || suggested === scanned.trim()) {
+        continue;
+      }
+      corrections.push({ field: correction.field, scanned, suggested, reason: correction.reason });
+      fields[correction.field] = suggested;
+    }
     drafts.push({
       key: `row-${index}`,
       type,
@@ -88,6 +117,7 @@ export function parsedToDrafts(
       note: row.note,
       lessonName: lessonNameForRow(markers, index, fallbackLessonName),
       excluded: false,
+      corrections,
     });
   });
   return drafts;

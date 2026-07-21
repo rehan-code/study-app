@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import type { DraftValidation, ReviewDraft } from '@/domain/scan-review';
+import type { DraftCorrection, DraftValidation, ReviewDraft } from '@/domain/scan-review';
 import {
   bulkLessonValue,
   clearFieldError,
+  correctionChoice,
+  correctionCount,
+  correctionSummaryMessage,
   distinctLessonNames,
   fieldErrorsFromProblems,
   headlineErrorMessage,
@@ -27,9 +30,17 @@ function makeDraft(overrides: Partial<ReviewDraft> = {}): ReviewDraft {
     note: null,
     lessonName: null,
     excluded: false,
+    corrections: [],
     ...overrides,
   };
 }
+
+const CORRECTION: DraftCorrection = {
+  field: 'present',
+  scanned: 'يَتَّصَلُ',
+  suggested: 'يَتَّصِلُ',
+  reason: 'The middle radical takes kasra in the present tense.',
+};
 
 describe('headlineFieldKey', () => {
   it('maps each card type to its required Arabic field', () => {
@@ -153,5 +164,44 @@ describe('lesson name helpers', () => {
 
   it('sorts pending names numerically', () => {
     expect(mergeLessonNames([], ['Lesson 10', 'Lesson 9'])).toEqual(['Lesson 9', 'Lesson 10']);
+  });
+});
+
+describe('correctionChoice', () => {
+  it('matches the suggested and scanned versions ignoring surrounding spaces', () => {
+    expect(correctionChoice('يَتَّصِلُ', CORRECTION)).toBe('suggested');
+    expect(correctionChoice(' يَتَّصِلُ ', CORRECTION)).toBe('suggested');
+    expect(correctionChoice('يَتَّصَلُ', CORRECTION)).toBe('scanned');
+  });
+
+  it('treats anything else as a custom value', () => {
+    expect(correctionChoice('يَتَواصَلُ', CORRECTION)).toBe('custom');
+    expect(correctionChoice('', CORRECTION)).toBe('custom');
+  });
+});
+
+describe('correctionCount', () => {
+  it('counts flagged answers on rows that will be saved', () => {
+    const drafts = [
+      makeDraft({ corrections: [CORRECTION] }),
+      makeDraft({ key: 'row-1', corrections: [CORRECTION, { ...CORRECTION, field: 'masdar' }] }),
+      makeDraft({ key: 'row-2' }),
+    ];
+    expect(correctionCount(drafts)).toBe(3);
+  });
+
+  it('skips excluded rows', () => {
+    const drafts = [
+      makeDraft({ corrections: [CORRECTION], excluded: true }),
+      makeDraft({ key: 'row-1', corrections: [CORRECTION] }),
+    ];
+    expect(correctionCount(drafts)).toBe(1);
+  });
+});
+
+describe('correctionSummaryMessage', () => {
+  it('reads naturally for one and for many', () => {
+    expect(correctionSummaryMessage(1)).toContain('1 answer');
+    expect(correctionSummaryMessage(3)).toContain('3 answers');
   });
 });

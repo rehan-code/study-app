@@ -26,6 +26,8 @@ import { LessonPicker } from '@/features/scan/lesson-picker';
 import {
   bulkLessonValue,
   clearFieldError,
+  correctionCount,
+  correctionSummaryMessage,
   distinctLessonNames,
   fieldErrorsFromProblems,
   headlineFieldKey,
@@ -70,6 +72,7 @@ export function ReviewEditor({ scan, parsed }: ReviewEditorProps) {
   );
   const [dirty, setDirty] = useState(false);
   const [warningsDismissed, setWarningsDismissed] = useState(false);
+  const [correctionsDismissed, setCorrectionsDismissed] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, DraftFieldErrors>>({});
   const [picker, setPicker] = useState<PickerTarget | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -214,6 +217,8 @@ export function ReviewEditor({ scan, parsed }: ReviewEditorProps) {
   const bulk = bulkLessonValue(drafts);
   const bulkLabel = bulk.state === 'mixed' ? 'Mixed' : (bulk.name ?? 'No lesson');
   const showWarnings = parsed.warnings.length > 0 && !warningsDismissed;
+  const flaggedCount = correctionCount(included);
+  const showCorrections = flaggedCount > 0 && !correctionsDismissed;
 
   return (
     <KeyboardAvoidingView
@@ -226,6 +231,25 @@ export function ReviewEditor({ scan, parsed }: ReviewEditorProps) {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.content}
       >
+        {showCorrections && (
+          <View style={[styles.warnings, { backgroundColor: theme.accentSoft }]}>
+            <SymbolView name="checkmark.seal" size={18} tintColor={theme.accent} />
+            <View style={styles.warningsText}>
+              <Text style={[styles.warningLine, { color: theme.text }]}>
+                {correctionSummaryMessage(flaggedCount)}
+              </Text>
+            </View>
+            <IconButton
+              icon="xmark"
+              accessibilityLabel="Dismiss correction summary"
+              size={14}
+              themeColor="accent"
+              onPress={() => {
+                setCorrectionsDismissed(true);
+              }}
+            />
+          </View>
+        )}
         {showWarnings && (
           <View style={[styles.warnings, { backgroundColor: theme.accentSoft }]}>
             <SymbolView name="exclamationmark.triangle" size={18} tintColor={theme.accent} />
