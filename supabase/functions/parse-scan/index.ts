@@ -1,7 +1,13 @@
 import { z } from 'npm:zod@4';
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 
-import { errorResponse, handleOptions, HttpError, jsonResponse } from '../_shared/http.ts';
+import {
+  errorResponse,
+  fetchWithTimeout,
+  handleOptions,
+  HttpError,
+  jsonResponse,
+} from '../_shared/http.ts';
 import { clientFromRequest } from '../_shared/supabase.ts';
 import {
   PARSED_FIELD_KEYS,
@@ -18,6 +24,12 @@ const MAX_OUTPUT_TOKENS = 16000;
 const TOOL_NAME = 'record_parsed_scan';
 // Anthropic rejects images above ~5MB; catching it here gives a clearer message.
 const MAX_PAGE_BYTES = 5 * 1024 * 1024;
+// Aborts well before the edge runtime's wall clock limit kills the function,
+// so a hung Anthropic call records 'failed' instead of stranding the scan.
+const ANTHROPIC_TIMEOUT_MS = 240_000;
+// Longer than any legitimate attempt (page downloads plus ANTHROPIC_TIMEOUT_MS).
+// A 'parsing' scan whose stamp is older than this is stranded; re-parse it.
+const PARSE_STALE_MS = 10 * 60 * 1000;
 
 const GENERIC_PARSE_ERROR = "Couldn't read those pages. Try parsing again.";
 
@@ -28,7 +40,19 @@ const scanRecordSchema = z.object({
   kind: z.enum(SCAN_KINDS),
   status: z.string(),
   page_paths: z.array(z.string()),
+  parse_started_at: z.string().nullable(),
 });
+
+function isParseStale(parseStartedAt: string | null): boolean {
+  if (parseStartedAt === null) {
+    return true;
+  }
+  const startedMs = Date.parse(parseStartedAt);
+  if (Number.isNaN(startedMs)) {
+    return true;
+  }
+  return Date.now() - startedMs > PARSE_STALE_MS;
+}
 
 const toolUseBlockSchema = z.object({ type: z.literal('tool_use'), input: z.unknown() });
 
@@ -216,27 +240,32 @@ async function requestParseFromClaude(kind: ScanKind, pages: string[]): Promise<
     throw new HttpError("AI parsing isn't set up yet. Add the ANTHROPIC_API_KEY secret.", 500);
   }
   const model = Deno.env.get('ANTHROPIC_MODEL') ?? DEFAULT_MODEL;
-  const response = await fetch(ANTHROPIC_URL, {
-    method: 'POST',
-    headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': ANTHROPIC_VERSION,
-      'Content-Type': 'application/json',
+  const response = await fetchWithTimeout(
+    ANTHROPIC_URL,
+    {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': ANTHROPIC_VERSION,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: MAX_OUTPUT_TOKENS,
+        tools: [
+          {
+            name: TOOL_NAME,
+            description: 'Record the structured transcription of the workbook page photos.',
+            input_schema: buildToolInputSchema(kind),
+          },
+        ],
+        tool_choice: { type: 'tool', name: TOOL_NAME },
+        messages: [{ role: 'user', content: buildContentBlocks(kind, pages) }],
+      }),
     },
-    body: JSON.stringify({
-      model,
-      max_tokens: MAX_OUTPUT_TOKENS,
-      tools: [
-        {
-          name: TOOL_NAME,
-          description: 'Record the structured transcription of the workbook page photos.',
-          input_schema: buildToolInputSchema(kind),
-        },
-      ],
-      tool_choice: { type: 'tool', name: TOOL_NAME },
-      messages: [{ role: 'user', content: buildContentBlocks(kind, pages) }],
-    }),
-  });
+    ANTHROPIC_TIMEOUT_MS,
+    new HttpError('The AI took too long to read the pages. Try parsing again.', 504),
+  );
   const bodyText = await response.text();
   if (!response.ok) {
     console.error('parse-scan: Anthropic error', { status: response.status, body: bodyText });
@@ -324,7 +353,7 @@ Deno.serve(async (req) => {
 
   const { data: scanRow, error: scanError } = await supabase
     .from('scans')
-    .select('id, kind, status, page_paths')
+    .select('id, kind, status, page_paths, parse_started_at')
     .eq('id', scanId)
     .maybeSingle();
   if (scanError) {
@@ -342,17 +371,31 @@ Deno.serve(async (req) => {
   if (scan.data.status === 'reviewed') {
     return errorResponse('This scan was already reviewed. Its cards are saved.', 409);
   }
+  if (scan.data.status === 'parsing' && !isParseStale(scan.data.parse_started_at)) {
+    return errorResponse('This scan is already being read. Wait for it to finish.', 409);
+  }
   if (scan.data.page_paths.length < 1 || scan.data.page_paths.length > 2) {
     return errorResponse('A scan needs one or two page photos.', 400);
   }
 
-  const { error: parsingError } = await supabase
+  // Compare-and-swap on the fields read above so two concurrent parse
+  // requests fail loudly instead of both calling the AI.
+  let claim = supabase
     .from('scans')
-    .update({ status: 'parsing', parse_error: null })
-    .eq('id', scanId);
+    .update({ status: 'parsing', parse_error: null, parse_started_at: new Date().toISOString() })
+    .eq('id', scanId)
+    .eq('status', scan.data.status);
+  claim =
+    scan.data.parse_started_at === null
+      ? claim.is('parse_started_at', null)
+      : claim.eq('parse_started_at', scan.data.parse_started_at);
+  const { data: claimed, error: parsingError } = await claim.select('id');
   if (parsingError) {
     console.error('parse-scan: could not mark scan as parsing', parsingError);
     return errorResponse("Couldn't start parsing. Try again.", 500);
+  }
+  if (claimed === null || claimed.length === 0) {
+    return errorResponse('This scan is already being read. Wait for it to finish.', 409);
   }
 
   try {
