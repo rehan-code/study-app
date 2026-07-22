@@ -15,10 +15,16 @@ export interface CardImageProps {
   bucket: 'scans' | 'card-images';
   path: string;
   height?: number;
+  /** Width becomes height * aspectRatio, centered, instead of filling the container. */
+  aspectRatio?: number;
 }
 
-export function CardImage({ bucket, path, height = DEFAULT_HEIGHT }: CardImageProps) {
+export function CardImage({ bucket, path, height = DEFAULT_HEIGHT, aspectRatio }: CardImageProps) {
   const theme = useTheme();
+  const frameSize =
+    aspectRatio === undefined
+      ? ({ height, width: '100%' } as const)
+      : ({ height, aspectRatio, alignSelf: 'center' } as const);
   // Remembering which URL failed (instead of a boolean) self-resets the
   // fallback when the signed URL refreshes or the path changes.
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
@@ -33,13 +39,20 @@ export function CardImage({ bucket, path, height = DEFAULT_HEIGHT }: CardImagePr
   });
 
   if (isPending) {
-    return <View style={[styles.frame, { height, backgroundColor: theme.backgroundSelected }]} />;
+    return (
+      <View style={[styles.frame, frameSize, { backgroundColor: theme.backgroundSelected }]} />
+    );
   }
 
   if (isError || url === undefined || url === failedUrl) {
     return (
       <View
-        style={[styles.frame, styles.center, { height, backgroundColor: theme.backgroundSelected }]}
+        style={[
+          styles.frame,
+          styles.center,
+          frameSize,
+          { backgroundColor: theme.backgroundSelected },
+        ]}
       >
         <SymbolView name="photo" size={28} tintColor={theme.textSecondary} />
       </View>
@@ -49,7 +62,7 @@ export function CardImage({ bucket, path, height = DEFAULT_HEIGHT }: CardImagePr
   return (
     <Image
       source={{ uri: url }}
-      style={[styles.frame, { height }]}
+      style={[styles.frame, frameSize]}
       contentFit="cover"
       transition={200}
       onError={() => {
@@ -61,7 +74,6 @@ export function CardImage({ bucket, path, height = DEFAULT_HEIGHT }: CardImagePr
 
 const styles = StyleSheet.create({
   frame: {
-    width: '100%',
     borderRadius: Radius.lg,
     overflow: 'hidden',
   },

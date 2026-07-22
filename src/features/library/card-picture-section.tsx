@@ -52,7 +52,12 @@ export function CardPictureSection({ card }: { card: Card }) {
     <Section title="Picture">
       <View style={styles.column}>
         {card.aiImagePath !== null && (
-          <CardImage bucket={CARD_IMAGES_BUCKET} path={card.aiImagePath} height={PREVIEW_HEIGHT} />
+          <CardImage
+            bucket={CARD_IMAGES_BUCKET}
+            path={card.aiImagePath}
+            height={PREVIEW_HEIGHT}
+            aspectRatio={4 / 3}
+          />
         )}
         {generateMutation.isError && (
           <Text style={[styles.error, { color: theme.danger }]}>

@@ -28,13 +28,16 @@ const falResponseSchema = z.object({
 });
 
 function buildPrompt(meaning: string): string {
+  // FLUX tends to render a quoted or colon-labelled phrase as a literal caption,
+  // so the meaning is woven into the scene description unquoted.
   return [
-    `A charming minimalist flat illustration that visually depicts: "${meaning}".`,
+    `A charming wordless minimalist flat illustration of ${meaning},`,
+    'communicating the idea purely through imagery.',
     'Modern flat vector style with one clear central subject, simple rounded geometric shapes,',
     'a warm friendly palette of terracotta, amber, sage green and cream, soft ambient shadows,',
     'and a clean plain light background with generous negative space.',
-    'Purely pictorial wordless imagery: absolutely no text, no letters, no numbers,',
-    'no labels, no captions, no typography, no watermarks, no writing of any kind.',
+    'Absolutely no text, no letters, no numbers, no labels, no captions, no typography,',
+    'no calligraphy, no signage, no watermarks, no writing of any kind.',
   ].join(' ');
 }
 
@@ -64,7 +67,7 @@ async function generateImageBytes(meaning: string): Promise<ArrayBuffer> {
       },
       body: JSON.stringify({
         prompt: buildPrompt(meaning),
-        image_size: 'square_hd',
+        image_size: 'landscape_4_3',
         num_images: 1,
       }),
     },

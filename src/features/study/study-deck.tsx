@@ -27,8 +27,9 @@ const MAX_ROTATION_DEG = 12;
 const VERTICAL_DRAG_FACTOR = 0.4;
 const EXIT_DURATION_MS = 220;
 const FLIP_DURATION_MS = 280;
-const FRONT_IMAGE_HEIGHT = 160;
-const BACK_IMAGE_HEIGHT = 90;
+const FRONT_IMAGE_HEIGHT = 200;
+const BACK_IMAGE_HEIGHT = 120;
+const CARD_IMAGE_RATIO = 4 / 3;
 const REST_SPRING = { damping: 18, stiffness: 220 } as const;
 
 export interface StudyDeckHandle {
@@ -61,7 +62,12 @@ function CardFront({ card, showImages }: { card: Card; showImages: boolean }) {
   return (
     <View style={styles.faceContent}>
       {cardShowsImage(card, showImages) && card.aiImagePath !== null && (
-        <CardImage bucket="card-images" path={card.aiImagePath} height={FRONT_IMAGE_HEIGHT} />
+        <CardImage
+          bucket="card-images"
+          path={card.aiImagePath}
+          height={FRONT_IMAGE_HEIGHT}
+          aspectRatio={CARD_IMAGE_RATIO}
+        />
       )}
       <View style={styles.headlineArea}>
         <ArabicText variant="hero" align="center">
@@ -80,6 +86,14 @@ function CardBack({ card, showImages }: { card: Card; showImages: boolean }) {
   const rows = cardDetailRows(card);
   return (
     <View style={styles.faceContent}>
+      {cardShowsImage(card, showImages) && card.aiImagePath !== null && (
+        <CardImage
+          bucket="card-images"
+          path={card.aiImagePath}
+          height={BACK_IMAGE_HEIGHT}
+          aspectRatio={CARD_IMAGE_RATIO}
+        />
+      )}
       <ThemedText type="subtitle" style={styles.centeredText}>
         {card.meaning}
       </ThemedText>
@@ -98,9 +112,6 @@ function CardBack({ card, showImages }: { card: Card; showImages: boolean }) {
             </View>
           ))}
         </ScrollView>
-      )}
-      {cardShowsImage(card, showImages) && card.aiImagePath !== null && (
-        <CardImage bucket="card-images" path={card.aiImagePath} height={BACK_IMAGE_HEIGHT} />
       )}
     </View>
   );
