@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Button } from '@/components/button';
@@ -49,16 +49,21 @@ export function HomeScreen() {
     queryFn: () => listCards(selectedLessonIds),
   });
 
-  const refreshing =
-    lessonsQuery.isRefetching || allCardsQuery.isRefetching || filteredCardsQuery.isRefetching;
+  // Local pull state only: background refetches (other tabs share these query
+  // keys) must not show this RefreshControl, or iOS leaves the content offset
+  // stuck below a phantom spinner when they fire while this tab is hidden.
+  const [refreshing, setRefreshing] = useState(false);
   const refetchLessons = lessonsQuery.refetch;
   const refetchAllCards = allCardsQuery.refetch;
   const refetchFilteredCards = filteredCardsQuery.refetch;
   const refresh = useCallback(() => {
     // Refetch failures land in each query's error state; the screen renders them.
-    refetchLessons().catch(() => undefined);
-    refetchAllCards().catch(() => undefined);
-    refetchFilteredCards().catch(() => undefined);
+    setRefreshing(true);
+    Promise.all([refetchLessons(), refetchAllCards(), refetchFilteredCards()])
+      .catch(() => undefined)
+      .finally(() => {
+        setRefreshing(false);
+      });
   }, [refetchAllCards, refetchFilteredCards, refetchLessons]);
 
   if (lessonsQuery.isPending || allCardsQuery.isPending || filteredCardsQuery.isPending) {
