@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import type { Card } from '@/domain/cards';
 import type { QuizKind } from '@/domain/quiz';
-import { newSrsState } from '@/domain/srs';
+import { newSrsState, type SrsState } from '@/domain/srs';
 
 import {
   countEligibleQuestions,
+  countStudiedCards,
   defaultQuizKinds,
   describeLessonSelection,
   parseQuizParams,
@@ -16,6 +17,11 @@ import {
 
 const NOW = new Date('2026-07-06T10:00:00.000Z');
 
+/** Quizzes only draw on studied words, so fixtures default to a reviewed card. */
+function studiedSrs(): SrsState {
+  return { box: 2, dueAt: NOW, correctCount: 2, incorrectCount: 0, lastReviewedAt: NOW };
+}
+
 interface VerbSpec {
   id: string;
   past: string;
@@ -23,6 +29,7 @@ interface VerbSpec {
   imperative?: string | null;
   masdar?: string | null;
   meaning: string;
+  srs?: SrsState;
 }
 
 function verbCard(spec: VerbSpec): Card {
@@ -34,7 +41,7 @@ function verbCard(spec: VerbSpec): Card {
     meaning: spec.meaning,
     aiImagePath: null,
     imageEnabled: true,
-    srs: newSrsState(NOW),
+    srs: spec.srs ?? studiedSrs(),
     createdAt: NOW,
     fields: {
       past: spec.past,
@@ -49,7 +56,7 @@ function verbCard(spec: VerbSpec): Card {
   };
 }
 
-function vocabCard(id: string, arabic: string, meaning: string): Card {
+function vocabCard(id: string, arabic: string, meaning: string, srs?: SrsState): Card {
   return {
     id,
     type: 'vocab',
@@ -58,7 +65,7 @@ function vocabCard(id: string, arabic: string, meaning: string): Card {
     meaning,
     aiImagePath: null,
     imageEnabled: true,
-    srs: newSrsState(NOW),
+    srs: srs ?? studiedSrs(),
     createdAt: NOW,
     fields: {
       arabic,
@@ -143,31 +150,58 @@ describe('countEligibleQuestions', () => {
     const kinds: QuizKind[] = ['present', 'meaning'];
     expect(countEligibleQuestions(cards, kinds)).toBe(countEligibleQuestions(cards, kinds));
   });
+
+  it('ignores words that have never been studied', () => {
+    const fresh = verbCard({
+      id: 'v-fresh',
+      past: 'سَأَلَ',
+      present: 'يَسْأَلُ',
+      meaning: 'To ask',
+      srs: newSrsState(NOW),
+    });
+    expect(countEligibleQuestions([ittasala, nazara, fresh], ['present'])).toBe(2);
+  });
+});
+
+describe('countStudiedCards', () => {
+  it('counts only words answered at least once', () => {
+    const fresh = vocabCard('n-fresh', 'قَلَم', 'Pen', newSrsState(NOW));
+    expect(countStudiedCards([ittasala, nazara, fresh])).toBe(2);
+  });
+
+  it('returns 0 for an empty collection', () => {
+    expect(countStudiedCards([])).toBe(0);
+  });
 });
 
 describe('startBlockedReason', () => {
   it('asks for a question type when none are on', () => {
-    expect(startBlockedReason(0, [], 10)).toMatch(/question type/i);
+    expect(startBlockedReason(0, [], 10, 10)).toMatch(/question type/i);
   });
 
   it('points at scanning when there are no cards at all', () => {
-    expect(startBlockedReason(0, ['present'], 0)).toMatch(/scan/i);
+    expect(startBlockedReason(0, ['present'], 0, 0)).toMatch(/scan/i);
+  });
+
+  it('points at studying when the cards have never been studied', () => {
+    expect(startBlockedReason(0, ['present'], 10, 0)).toMatch(/study session/i);
+    expect(startBlockedReason(0, ['meaning'], 10, 1)).toMatch(/study session/i);
   });
 
   it('suggests any-card questions when only verb kinds are on', () => {
-    expect(startBlockedReason(1, ['present'], 5)).toMatch(/meaning or plural/i);
-    expect(startBlockedReason(1, ['present', 'imperative', 'masdar'], 5)).toMatch(
+    expect(startBlockedReason(1, ['present'], 5, 5)).toMatch(/meaning or plural/i);
+    expect(startBlockedReason(1, ['present', 'imperative', 'masdar'], 5, 5)).toMatch(
       /meaning or plural/i,
     );
   });
 
-  it('asks for more cards when an any-card kind is already on', () => {
-    expect(startBlockedReason(1, ['present', 'meaning'], 1)).toMatch(/more pages/i);
-    expect(startBlockedReason(1, ['plural'], 1)).toMatch(/more pages/i);
+  it('asks for more studied words when an any-card kind is already on', () => {
+    expect(startBlockedReason(1, ['present', 'meaning'], 3, 2)).toMatch(/studied words/i);
+    expect(startBlockedReason(1, ['plural'], 3, 2)).toMatch(/studied words/i);
   });
 
   it('returns null when enough questions are available', () => {
-    expect(startBlockedReason(2, ['present'], 5)).toBeNull();
+    expect(startBlockedReason(2, ['present'], 5, 5)).toBeNull();
   });
 });
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isDue,
   isNew,
+  learnedness,
   LEITNER_INTERVALS_MS,
   MAX_BOX,
   newSrsState,
@@ -107,6 +108,50 @@ describe('reviewCard not_yet', () => {
     expect(next.correctCount).toBe(4);
     expect(next.incorrectCount).toBe(3);
     expect(next.lastReviewedAt).toEqual(NOW);
+  });
+});
+
+describe('learnedness', () => {
+  function state(box: number, correctCount: number, incorrectCount: number): SrsState {
+    return { box, dueAt: NOW, correctCount, incorrectCount, lastReviewedAt: NOW };
+  }
+
+  it('is 0 for a word that has never been answered', () => {
+    expect(learnedness(newSrsState(NOW))).toBe(0);
+  });
+
+  it('is 0 for a word knocked back to box 0 by a miss', () => {
+    expect(learnedness(state(0, 0, 3))).toBe(0);
+  });
+
+  it('is 1 for a word at the top box with a clean record', () => {
+    expect(learnedness(state(MAX_BOX, MAX_BOX, 0))).toBe(1);
+  });
+
+  it('rises with the box', () => {
+    const low = learnedness(state(1, 1, 0));
+    const middle = learnedness(state(3, 3, 0));
+    const high = learnedness(state(5, 5, 0));
+    expect(low).toBeLessThan(middle);
+    expect(middle).toBeLessThan(high);
+  });
+
+  it('separates same-box words by how often they were missed', () => {
+    expect(learnedness(state(3, 3, 0))).toBeGreaterThan(learnedness(state(3, 3, 5)));
+  });
+
+  it('stays within 0 and 1 across the whole box range', () => {
+    for (let box = 0; box <= MAX_BOX; box += 1) {
+      const value = learnedness(state(box, box, 2));
+      expect(value).toBeGreaterThanOrEqual(0);
+      expect(value).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('drops after a miss and climbs after a correct answer', () => {
+    const before = reviewedState(3);
+    expect(learnedness(reviewCard(before, 'not_yet', NOW))).toBeLessThan(learnedness(before));
+    expect(learnedness(reviewCard(before, 'got_it', NOW))).toBeGreaterThan(learnedness(before));
   });
 });
 

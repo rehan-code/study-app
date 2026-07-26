@@ -46,6 +46,26 @@ export function isDue(state: SrsState, now: Date): boolean {
   return state.dueAt.getTime() <= now.getTime();
 }
 
+/**
+ * How much the level owes to the Leitner box; the rest comes from the answer
+ * record, so two words in the same box separate by how cleanly they got there.
+ */
+const BOX_SHARE = 0.75;
+
+/**
+ * How well a word is known, 0 (never answered, or just missed) to 1 (top box
+ * with a clean record). Quiz selection reads this so the shakiest words come
+ * up most, and every answer moves it because answers move the box.
+ */
+export function learnedness(state: SrsState): number {
+  if (isNew(state)) {
+    return 0;
+  }
+  const attempts = state.correctCount + state.incorrectCount;
+  const accuracy = attempts === 0 ? 0 : state.correctCount / attempts;
+  return BOX_SHARE * (state.box / MAX_BOX) + (1 - BOX_SHARE) * accuracy;
+}
+
 export function reviewCard(state: SrsState, result: ReviewResult, now: Date): SrsState {
   if (result === 'got_it') {
     const box = Math.min(state.box + 1, MAX_BOX);

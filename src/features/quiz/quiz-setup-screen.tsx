@@ -18,6 +18,7 @@ import { useStudyFilter } from '@/lib/stores';
 
 import {
   countEligibleQuestions,
+  countStudiedCards,
   DEFAULT_QUIZ_COUNT,
   defaultQuizKinds,
   describeLessonSelection,
@@ -28,6 +29,9 @@ import {
   toggleQuizKind,
 } from '@/features/quiz/quiz-config';
 import { SegmentedOptions } from '@/features/quiz/segmented-options';
+
+const QUIZ_SELECTION_HINT =
+  "Drawn from the words you have studied, least learned first. Answers count toward each word's level.";
 
 const questionTypeGroups = [
   { caption: 'Any card', options: QUIZ_KIND_OPTIONS.filter((option) => !option.verbOnly) },
@@ -58,6 +62,7 @@ export function QuizSetupScreen() {
     () => (cards === undefined ? 0 : countEligibleQuestions(cards, kinds)),
     [cards, kinds],
   );
+  const studied = useMemo(() => (cards === undefined ? 0 : countStudiedCards(cards)), [cards]);
 
   const handleBack = () => {
     if (router.canGoBack()) {
@@ -95,7 +100,7 @@ export function QuizSetupScreen() {
     );
   }
 
-  const blockedReason = startBlockedReason(eligible, kinds, cards.length);
+  const blockedReason = startBlockedReason(eligible, kinds, cards.length, studied);
   const availability = eligible === 1 ? '1 question available' : `${eligible} questions available`;
 
   return (
@@ -125,6 +130,9 @@ export function QuizSetupScreen() {
             How many questions
           </ThemedText>
           <SegmentedOptions options={QUIZ_COUNT_OPTIONS} value={count} onChange={setCount} />
+          <ThemedText type="small" themeColor="textSecondary">
+            {QUIZ_SELECTION_HINT}
+          </ThemedText>
         </View>
 
         <View style={styles.section}>

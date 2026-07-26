@@ -1,4 +1,5 @@
-import { cardHeadline, type Card } from '@/domain/cards';
+import { cardHeadline, withCardSrs, type Card } from '@/domain/cards';
+import { isNew, learnedness, reviewCard, type SrsState } from '@/domain/srs';
 
 export type QuizKind = 'present' | 'imperative' | 'masdar' | 'meaning' | 'plural';
 
@@ -202,6 +203,44 @@ function buildQuestion(
   return null;
 }
 
+/**
+ * A word that is fully learned still gets this much weight, so a quiz keeps
+ * some variety instead of drilling the same shaky handful forever.
+ */
+const MASTERED_WEIGHT = 0.15;
+
+/**
+ * How likely a word is to be picked. Squaring the gap to fully learned makes
+ * the drop-off steep: a word sitting in box 0 comes up roughly eight times as
+ * often as one at the top box, and one halfway there nearly three times as often.
+ */
+function selectionWeight(state: SrsState): number {
+  const gap = 1 - learnedness(state);
+  return MASTERED_WEIGHT + gap * gap;
+}
+
+/**
+ * Weighted sampling without replacement (Efraimidis-Spirakis): each card gets
+ * the key rng^(1/weight), and sorting by that key descending draws heavier
+ * cards first while still leaving lighter ones a real chance.
+ */
+function weightedOrder(cards: readonly Card[], rng: () => number): Card[] {
+  return cards
+    .map((card) => ({ card, key: Math.pow(rng(), 1 / selectionWeight(card.srs)) }))
+    .sort((a, b) => b.key - a.key)
+    .map((entry) => entry.card);
+}
+
+/** Cards the quiz may ask about: the ones already answered at least once. */
+export function quizPool(cards: readonly Card[]): Card[] {
+  return cards.filter((card) => !isNew(card.srs));
+}
+
+/**
+ * Questions come from words the user has already studied, weighted so the
+ * least learned come up most, and are then asked least-learned first.
+ * Distractors still draw on the whole collection, new words included.
+ */
 export function buildQuiz(
   cards: Card[],
   options: { count: number; kinds: QuizKind[]; rng: () => number },
@@ -210,15 +249,40 @@ export function buildQuiz(
   if (count <= 0 || kinds.length === 0) {
     return [];
   }
-  const questions: QuizQuestion[] = [];
-  for (const card of shuffleWith(cards, rng)) {
-    if (questions.length >= count) {
+  const picked: { question: QuizQuestion; learned: number }[] = [];
+  for (const card of weightedOrder(quizPool(cards), rng)) {
+    if (picked.length >= count) {
       break;
     }
     const question = buildQuestion(cards, card, kinds, rng);
     if (question !== null) {
-      questions.push(question);
+      picked.push({ question, learned: learnedness(card.srs) });
     }
   }
-  return questions;
+  // Stable, so equally learned words keep the order they were drawn in.
+  return picked.sort((a, b) => a.learned - b.learned).map((entry) => entry.question);
+}
+
+/**
+ * A quiz answer counts exactly like a flashcard answer: right moves the word up
+ * a box, wrong sends it back to the start. Returns the card's new progress plus
+ * the collection carrying it, or null when the card is not in the collection.
+ */
+export function answerQuizQuestion(
+  cards: readonly Card[],
+  cardId: string,
+  correct: boolean,
+  now: Date,
+): { cards: Card[]; srs: SrsState } | null {
+  const card = cards.find((candidate) => candidate.id === cardId);
+  if (card === undefined) {
+    return null;
+  }
+  const srs = reviewCard(card.srs, correct ? 'got_it' : 'not_yet', now);
+  return {
+    cards: cards.map((candidate) =>
+      candidate.id === cardId ? withCardSrs(candidate, srs) : candidate,
+    ),
+    srs,
+  };
 }

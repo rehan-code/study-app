@@ -1,10 +1,28 @@
 import { describe, expect, it } from 'vitest';
 
-import { cardHeadline, type Card } from '@/domain/cards';
-import { buildQuiz, mulberry32, type QuizKind, type QuizQuestion } from '@/domain/quiz';
-import { newSrsState } from '@/domain/srs';
+import { cardHeadline, withCardSrs, type Card } from '@/domain/cards';
+import {
+  answerQuizQuestion,
+  buildQuiz,
+  mulberry32,
+  quizPool,
+  type QuizKind,
+  type QuizQuestion,
+} from '@/domain/quiz';
+import { MAX_BOX, newSrsState, type SrsState } from '@/domain/srs';
 
 const NOW = new Date('2026-07-06T10:00:00.000Z');
+
+/** Quizzes only draw on studied words, so fixtures default to a reviewed card. */
+function studiedSrs(box = 3, incorrectCount = 0): SrsState {
+  return {
+    box,
+    dueAt: NOW,
+    correctCount: box,
+    incorrectCount,
+    lastReviewedAt: NOW,
+  };
+}
 
 interface VerbSpec {
   id: string;
@@ -14,6 +32,7 @@ interface VerbSpec {
   imperative?: string | null;
   masdar?: string | null;
   meaning: string;
+  srs?: SrsState;
 }
 
 function verbCard(spec: VerbSpec): Card {
@@ -25,7 +44,7 @@ function verbCard(spec: VerbSpec): Card {
     meaning: spec.meaning,
     aiImagePath: null,
     imageEnabled: true,
-    srs: newSrsState(NOW),
+    srs: spec.srs ?? studiedSrs(),
     createdAt: NOW,
     fields: {
       past: spec.past,
@@ -40,7 +59,7 @@ function verbCard(spec: VerbSpec): Card {
   };
 }
 
-function vocabCard(id: string, arabic: string, meaning: string): Card {
+function vocabCard(id: string, arabic: string, meaning: string, srs?: SrsState): Card {
   return {
     id,
     type: 'vocab',
@@ -49,7 +68,7 @@ function vocabCard(id: string, arabic: string, meaning: string): Card {
     meaning,
     aiImagePath: null,
     imageEnabled: true,
-    srs: newSrsState(NOW),
+    srs: srs ?? studiedSrs(),
     createdAt: NOW,
     fields: {
       arabic,
@@ -460,6 +479,162 @@ describe('buildQuiz composition', () => {
       expect(question.choices.length).toBeGreaterThanOrEqual(2);
       expect(question.choices.length).toBeLessThanOrEqual(4);
     }
+  });
+});
+
+describe('buildQuiz learnedness', () => {
+  const shaky = verbCard({
+    id: 'v-shaky',
+    past: 'رَجَعَ',
+    present: 'يَرْجِعُ',
+    meaning: 'To return',
+    srs: studiedSrs(0, 4),
+  });
+  const middling = verbCard({
+    id: 'v-middling',
+    past: 'كَتَبَ',
+    present: 'يَكْتُبُ',
+    meaning: 'To write',
+    srs: studiedSrs(3, 1),
+  });
+  const mastered = verbCard({
+    id: 'v-mastered',
+    past: 'قَرَأَ',
+    present: 'يَقْرَأُ',
+    meaning: 'To read',
+    srs: studiedSrs(MAX_BOX),
+  });
+  const byLearnedness = [shaky, middling, mastered];
+
+  it('leaves never-studied words out of the pool', () => {
+    const fresh = verbCard({
+      id: 'v-fresh',
+      past: 'سَأَلَ',
+      present: 'يَسْأَلُ',
+      meaning: 'To ask',
+      srs: newSrsState(NOW),
+    });
+    expect(quizPool([fresh, ...byLearnedness]).map((card) => card.id)).toEqual([
+      'v-shaky',
+      'v-middling',
+      'v-mastered',
+    ]);
+  });
+
+  it('never asks about a word that has not been studied', () => {
+    const fresh = verbCard({
+      id: 'v-fresh',
+      past: 'سَأَلَ',
+      present: 'يَسْأَلُ',
+      meaning: 'To ask',
+      srs: newSrsState(NOW),
+    });
+    for (const seed of [1, 2, 3, 17, 99]) {
+      const questions = buildQuiz([fresh, ...byLearnedness], {
+        count: 10,
+        kinds: ['present'],
+        rng: mulberry32(seed),
+      });
+      expect(questions).toHaveLength(3);
+      expect(questions.some((question) => question.cardId === 'v-fresh')).toBe(false);
+    }
+  });
+
+  it('still offers never-studied words as distractors', () => {
+    const fresh = verbCard({
+      id: 'v-fresh',
+      past: 'سَأَلَ',
+      present: 'يَسْأَلُ',
+      meaning: 'To ask',
+      srs: newSrsState(NOW),
+    });
+    const questions = buildQuiz([fresh, ...byLearnedness], {
+      count: 10,
+      kinds: ['present'],
+      rng: mulberry32(4),
+    });
+    const choices = questions.flatMap((question) => question.choices);
+    expect(choices).toContain('يَسْأَلُ');
+  });
+
+  it('returns an empty quiz when nothing has been studied yet', () => {
+    const fresh = fullVerbs.map((card) => withCardSrs(card, newSrsState(NOW)));
+    expect(buildQuiz(fresh, { count: 5, kinds: ['present'], rng: mulberry32(5) })).toEqual([]);
+  });
+
+  it('asks the least learned words first', () => {
+    for (const seed of [1, 2, 3, 17, 99]) {
+      const questions = buildQuiz(byLearnedness, {
+        count: 3,
+        kinds: ['present'],
+        rng: mulberry32(seed),
+      });
+      expect(questions.map((question) => question.cardId)).toEqual([
+        'v-shaky',
+        'v-middling',
+        'v-mastered',
+      ]);
+    }
+  });
+
+  it('picks the least learned words far more often when the quiz is short', () => {
+    const appearances = new Map<string, number>();
+    for (let seed = 1; seed <= 200; seed += 1) {
+      const questions = buildQuiz(byLearnedness, {
+        count: 1,
+        kinds: ['present'],
+        rng: mulberry32(seed),
+      });
+      expect(questions).toHaveLength(1);
+      const id = questions[0].cardId;
+      appearances.set(id, (appearances.get(id) ?? 0) + 1);
+    }
+    const shakyCount = appearances.get('v-shaky') ?? 0;
+    const middlingCount = appearances.get('v-middling') ?? 0;
+    const masteredCount = appearances.get('v-mastered') ?? 0;
+    expect(shakyCount).toBeGreaterThan(middlingCount);
+    expect(middlingCount).toBeGreaterThan(masteredCount);
+    // Mastered words stay in the rotation rather than dropping out entirely.
+    expect(masteredCount).toBeGreaterThan(0);
+  });
+});
+
+describe('answerQuizQuestion', () => {
+  const cards = [
+    verbCard({
+      id: 'v-kataba',
+      past: 'كَتَبَ',
+      present: 'يَكْتُبُ',
+      meaning: 'To write',
+      srs: studiedSrs(2),
+    }),
+    usbu,
+  ];
+  const later = new Date(NOW.getTime() + 60_000);
+
+  it('moves a right answer up a box', () => {
+    const outcome = answerQuizQuestion(cards, 'v-kataba', true, later);
+    expect(outcome?.srs.box).toBe(3);
+    expect(outcome?.srs.correctCount).toBe(3);
+    expect(outcome?.srs.lastReviewedAt).toEqual(later);
+  });
+
+  it('sends a wrong answer back to the start', () => {
+    const outcome = answerQuizQuestion(cards, 'v-kataba', false, later);
+    expect(outcome?.srs.box).toBe(0);
+    expect(outcome?.srs.incorrectCount).toBe(1);
+    expect(outcome?.srs.dueAt).toEqual(later);
+  });
+
+  it('returns the collection carrying the new progress and leaves the input alone', () => {
+    const outcome = answerQuizQuestion(cards, 'v-kataba', true, later);
+    expect(outcome?.cards.find((card) => card.id === 'v-kataba')?.srs.box).toBe(3);
+    expect(outcome?.cards.find((card) => card.id === 'n-usbu')).toBe(usbu);
+    expect(cards[0].srs.box).toBe(2);
+  });
+
+  it('returns null for a card outside the collection', () => {
+    expect(answerQuizQuestion(cards, 'v-missing', true, later)).toBeNull();
   });
 });
 

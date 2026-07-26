@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import type { Card } from '@/domain/cards';
-import { buildQuiz, mulberry32, type QuizKind } from '@/domain/quiz';
+import { buildQuiz, mulberry32, quizPool, type QuizKind } from '@/domain/quiz';
 
 export const QUIZ_COUNT_OPTIONS: readonly number[] = [5, 10, 20];
 export const DEFAULT_QUIZ_COUNT = 10;
@@ -55,7 +55,7 @@ export function toggleQuizKind(kinds: readonly QuizKind[], kind: QuizKind): Quiz
 /** Fixed seed so the availability count stays stable across renders. */
 const ELIGIBLE_COUNT_SEED = 1;
 
-/** Dry-runs buildQuiz uncapped; it yields at most one question per card. */
+/** Dry-runs buildQuiz uncapped; it yields at most one question per studied card. */
 export function countEligibleQuestions(cards: readonly Card[], kinds: readonly QuizKind[]): number {
   if (cards.length === 0 || kinds.length === 0) {
     return 0;
@@ -67,11 +67,17 @@ export function countEligibleQuestions(cards: readonly Card[], kinds: readonly Q
   }).length;
 }
 
+/** Words the quiz can draw on: those studied at least once. */
+export function countStudiedCards(cards: readonly Card[]): number {
+  return quizPool(cards).length;
+}
+
 /** Why Start is disabled, or null when the quiz can begin. */
 export function startBlockedReason(
   eligible: number,
   kinds: readonly QuizKind[],
   totalCards: number,
+  studiedCards: number,
 ): string | null {
   if (kinds.length === 0) {
     return 'Turn on at least one question type to start.';
@@ -79,11 +85,14 @@ export function startBlockedReason(
   if (totalCards === 0) {
     return 'No cards in these lessons yet. Scan a workbook page on the Scan tab first.';
   }
+  if (studiedCards < MIN_QUIZ_QUESTIONS) {
+    return 'Quizzes only cover words you have studied. Start a study session first, then come back.';
+  }
   if (eligible < MIN_QUIZ_QUESTIONS) {
     if (kinds.every((kind) => VERB_ONLY_KINDS.has(kind))) {
-      return 'These question types need verb cards. Turn on Meaning or Plural, or scan verb pages first.';
+      return 'These question types need verb cards. Turn on Meaning or Plural, or study some verbs first.';
     }
-    return 'Not enough cards to quiz yet. Scan a few more pages first.';
+    return 'Not enough studied words for these question types. Study a few more, or turn on another type.';
   }
   return null;
 }

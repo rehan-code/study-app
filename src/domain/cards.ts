@@ -141,6 +141,18 @@ export function cardFromRow(raw: unknown): Card {
   }
 }
 
+/** Copy of the card with new progress. Switched on type so the field union stays narrowed. */
+export function withCardSrs(card: Card, srs: SrsState): Card {
+  switch (card.type) {
+    case 'vocab':
+      return { ...card, srs };
+    case 'verb':
+      return { ...card, srs };
+    case 'phrase':
+      return { ...card, srs };
+  }
+}
+
 export interface FieldLabel {
   key: string;
   label: string;

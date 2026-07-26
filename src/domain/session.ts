@@ -1,4 +1,4 @@
-import type { Card } from '@/domain/cards';
+import { withCardSrs, type Card } from '@/domain/cards';
 import { isNew, reviewCard, type ReviewResult, type SrsState } from '@/domain/srs';
 
 export interface SessionEntry {
@@ -48,17 +48,6 @@ export function currentCard(state: StudySessionState): Card | null {
   return state.queue.length > 0 ? state.queue[0] : null;
 }
 
-function withSrs(card: Card, srs: SrsState): Card {
-  switch (card.type) {
-    case 'vocab':
-      return { ...card, srs };
-    case 'verb':
-      return { ...card, srs };
-    case 'phrase':
-      return { ...card, srs };
-  }
-}
-
 export function answerCurrent(
   state: StudySessionState,
   result: ReviewResult,
@@ -76,7 +65,7 @@ export function answerCurrent(
     queue = rest;
   } else {
     const insertAt = Math.min(NOT_YET_REINSERT_OFFSET, rest.length);
-    queue = [...rest.slice(0, insertAt), withSrs(card, next), ...rest.slice(insertAt)];
+    queue = [...rest.slice(0, insertAt), withCardSrs(card, next), ...rest.slice(insertAt)];
   }
   return { queue, history: [...state.history, entry], totalPlanned: state.totalPlanned };
 }

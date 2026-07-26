@@ -55,8 +55,12 @@ supabase/migrations/0001_init.sql (data model).
 
 Already implemented (do not rewrite, extend only if a contract below requires it):
 `cards.ts` (types, zod schemas, `cardFromRow`, `FIELD_LABELS`, `cardHeadline`,
-`cardDetailRows`), `srs.ts` (Leitner), `parsed-scan.ts` (parser contract +
-`PARSED_FIELD_KEYS`), `scans.ts`, `lessons.ts`.
+`cardDetailRows`, `withCardSrs`), `srs.ts` (Leitner + `learnedness`), `parsed-scan.ts`
+(parser contract + `PARSED_FIELD_KEYS`), `scans.ts`, `lessons.ts`.
+
+`learnedness(state)` scores how well a word is known, 0 (never answered, or just missed) to
+1 (top box, clean record): 75% from `box / MAX_BOX`, 25% from lifetime accuracy, so two
+words in the same box separate by how cleanly they got there. Quiz selection reads it.
 
 ### src/domain/session.ts (to implement)
 
@@ -103,10 +107,10 @@ fewer than 3 remain). A card answered `not_yet` and later `got_it` produces two 
 entries; `sessionSummary` counts a card as `notYet` if ANY of its entries missed.
 `undoLast` restores the last history entry's card to the queue head with its `previous` state.
 
-### src/domain/quiz.ts (to implement)
+### src/domain/quiz.ts
 
 ```ts
-export type QuizKind = 'present' | 'imperative' | 'masdar' | 'meaning';
+export type QuizKind = 'present' | 'imperative' | 'masdar' | 'meaning' | 'plural';
 export interface QuizQuestion {
   cardId: string;
   kind: QuizKind;
@@ -117,18 +121,34 @@ export interface QuizQuestion {
   correctIndex: number;
 }
 export function mulberry32(seed: number): () => number;
+export function quizPool(cards: readonly Card[]): Card[];
 export function buildQuiz(
   cards: Card[],
   options: { count: number; kinds: QuizKind[]; rng: () => number },
 ): QuizQuestion[];
+export function answerQuizQuestion(
+  cards: readonly Card[],
+  cardId: string,
+  correct: boolean,
+  now: Date,
+): { cards: Card[]; srs: SrsState } | null;
 ```
 
 Rules: for verb-form kinds, eligible cards are verbs with a non-null target field; the
-correct answer is that field; distractors are the same field from OTHER verb cards (unique,
-not equal to the correct answer), preferring 3 distractors but allowing 1 minimum, else the
-card is skipped. For 'meaning', any card type is eligible; prompt is `cardHeadline`, choices
-are meanings. Choice order shuffled with rng; no duplicate cards in one quiz; if fewer
-eligible cards than `count`, return as many as possible. Deterministic given the same rng.
+correct answer is that field; distractors are the same field from OTHER cards (unique, not
+equal to the correct answer), ranked by similarity to the correct answer (letter distance +
+wazn skeleton distance), preferring 3 distractors but allowing 1 minimum, else the card is
+skipped. For 'meaning', any card type is eligible; prompt is `cardHeadline`, choices are
+meanings. For 'plural', vocab cards with `plural1 ?? plural2`.
+
+Selection: prompts come only from `quizPool` (cards with `lastReviewedAt !== null`, i.e.
+already studied), drawn by weighted sampling without replacement where a card's weight is
+`0.15 + (1 - learnedness)^2`, then returned sorted by `learnedness` ascending, so the least
+learned words come up most often and are asked first. Distractors still draw on the whole
+collection, never-studied cards included. Choice order shuffled with rng; no duplicate cards
+in one quiz; if fewer eligible cards than `count`, return as many as possible. Deterministic
+given the same rng. `answerQuizQuestion` applies a quiz answer exactly like a flashcard
+answer (`reviewCard` with `got_it` / `not_yet`), so quiz results move the SRS level.
 
 ### src/domain/scan-review.ts (to implement)
 
@@ -363,6 +383,13 @@ One question at a time: instruction, prompt Arabic large, four (or fewer) choice
 Tap: locks choices, correct turns success, wrong pick turns danger while correct pulses,
 haptic, auto-advance after ~900ms. Results: score headline, per-question list (prompt,
 your answer, correct answer), Try again (new seed) and Done.
+
+Each answer persists immediately via `applyReview` (fire-and-forget with a dismissible
+error banner, same as the study deck), so a quiz raises and lowers levels exactly like a
+flashcard session. The runner holds its own copy of the cards and applies each answer to it,
+so "Try again" reflects the levels this quiz just changed; the cards query is invalidated on
+exit. Setup blocks with a "study first" message while fewer than `MIN_QUIZ_QUESTIONS` cards
+in the selection have ever been studied.
 
 ## Testing
 

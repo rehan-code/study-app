@@ -11,6 +11,8 @@ import type { QuizQuestion } from '@/domain/quiz';
 
 import { scoreQuiz, scoreTier } from '@/features/quiz/quiz-results';
 
+const LEVELS_UPDATED_NOTE = "Every answer counted toward that word's level.";
+
 export interface ResultsViewProps {
   questions: readonly QuizQuestion[];
   answers: readonly number[];
@@ -106,6 +108,11 @@ export function ResultsView({ questions, answers, onTryAgain, onDone }: ResultsV
         <ThemedText type="small" themeColor="textSecondary" style={styles.centered}>
           {tier.message}
         </ThemedText>
+        {score.total > 0 && (
+          <ThemedText type="small" themeColor="textSecondary" style={styles.centered}>
+            {LEVELS_UPDATED_NOTE}
+          </ThemedText>
+        )}
       </View>
       <Surface padded={false}>
         {questions.map((question, index) => (
