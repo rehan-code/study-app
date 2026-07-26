@@ -27,7 +27,6 @@ const MAX_ROTATION_DEG = 12;
 const VERTICAL_DRAG_FACTOR = 0.4;
 const EXIT_DURATION_MS = 220;
 const FLIP_DURATION_MS = 280;
-const FRONT_IMAGE_HEIGHT = 200;
 const BACK_IMAGE_HEIGHT = 120;
 const CARD_IMAGE_RATIO = 4 / 3;
 const REST_SPRING = { damping: 18, stiffness: 220 } as const;
@@ -58,17 +57,10 @@ function cardShowsImage(card: Card, showImages: boolean): boolean {
   return showImages && card.imageEnabled && card.aiImagePath !== null;
 }
 
-function CardFront({ card, showImages }: { card: Card; showImages: boolean }) {
+/** The front stays image-free on purpose: the picture is a hint, so it belongs on the back. */
+function CardFront({ card }: { card: Card }) {
   return (
     <View style={styles.faceContent}>
-      {cardShowsImage(card, showImages) && card.aiImagePath !== null && (
-        <CardImage
-          bucket="card-images"
-          path={card.aiImagePath}
-          height={FRONT_IMAGE_HEIGHT}
-          aspectRatio={CARD_IMAGE_RATIO}
-        />
-      )}
       <View style={styles.headlineArea}>
         <ArabicText variant="hero" align="center">
           {cardHeadline(card)}
@@ -184,7 +176,7 @@ function GhostCard({
       {flight.showBack ? (
         <CardBack card={flight.card} showImages={showImages} />
       ) : (
-        <CardFront card={flight.card} showImages={showImages} />
+        <CardFront card={flight.card} />
       )}
       {flight.result === 'got_it' ? (
         <AnswerOverlay label="Got it" softColor="successSoft" strongColor="success" />
@@ -362,7 +354,7 @@ function InteractiveCard({
           pointerEvents={isBack ? 'none' : 'auto'}
           style={[styles.face, styles.absoluteFace, faceColors, frontFlipStyle]}
         >
-          <CardFront card={card} showImages={showImages} />
+          <CardFront card={card} />
         </Animated.View>
         <Animated.View
           pointerEvents={isBack ? 'auto' : 'none'}
@@ -425,7 +417,7 @@ export function StudyDeck({
       {behindCard !== null && (
         <View pointerEvents="none" style={[styles.cardLayer, styles.behindCard]}>
           <View style={[styles.face, faceColors, StyleSheet.absoluteFill]}>
-            <CardFront card={behindCard} showImages={showImages} />
+            <CardFront card={behindCard} />
           </View>
         </View>
       )}
