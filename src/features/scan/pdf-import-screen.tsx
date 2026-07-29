@@ -4,7 +4,7 @@ import { useKeepAwake } from 'expo-keep-awake';
 import { useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
 
 import { Button } from '@/components/button';
 import { ErrorState } from '@/components/error-state';
@@ -12,11 +12,15 @@ import { LoadingState } from '@/components/loading-state';
 import { ProgressBar } from '@/components/progress-bar';
 import { Screen } from '@/components/screen';
 import { Surface } from '@/components/surface';
+import { TextField } from '@/components/text-field';
 import { Radius, Spacing } from '@/constants/theme';
 import {
   describeImportProgress,
+  describeImportRange,
   describeImportResult,
   importProgressFraction,
+  parsePageRange,
+  type ImportPageRange,
   type PdfImport,
 } from '@/domain/pdf-import';
 import { ScanScreenHeader } from '@/features/scan/scan-screen-header';
@@ -30,12 +34,10 @@ function KeepAwakeWhileRunning() {
 }
 
 interface PickStepProps {
-  busy: boolean;
-  errorMessage: string | null;
   onPicked: (uri: string) => void;
 }
 
-function PickStep({ busy, errorMessage, onPicked }: PickStepProps) {
+function PickStep({ onPicked }: PickStepProps) {
   const theme = useTheme();
 
   const pick = async () => {
@@ -55,25 +57,111 @@ function PickStep({ busy, errorMessage, onPicked }: PickStepProps) {
       <View style={[styles.heroIcon, { backgroundColor: theme.primarySoft }]}>
         <SymbolView name="book.closed" size={26} tintColor={theme.primary} />
       </View>
-      <Text style={[styles.title, { color: theme.text }]}>Import the whole book</Text>
+      <Text style={[styles.title, { color: theme.text }]}>Import from the book</Text>
       <Text style={[styles.message, { color: theme.textSecondary }]}>
         {
-          "Pick the curriculum PDF and Mufradat reads every lesson's printed vocabulary tables into cards, a few pages at a time. Pause and resume whenever you like."
+          "Pick the curriculum PDF, choose which pages to read, and Mufradat turns those pages' printed vocabulary tables into cards. Pause and resume whenever you like."
         }
       </Text>
       <Button
-        label={busy ? 'Uploading' : 'Choose PDF'}
+        label="Choose PDF"
         icon="doc.badge.plus"
         size="lg"
-        loading={busy}
         onPress={() => {
           void pick();
         }}
       />
-      {errorMessage !== null && (
-        <Text style={[styles.statusText, { color: theme.danger }]}>{errorMessage}</Text>
-      )}
     </View>
+  );
+}
+
+interface RangeStepProps {
+  /** True when the pages come from a book that is already uploaded. */
+  sameBook: boolean;
+  busy: boolean;
+  errorMessage: string | null;
+  onCancel: () => void;
+  onStart: (range: ImportPageRange) => void;
+}
+
+function RangeStep({ sameBook, busy, errorMessage, onCancel, onStart }: RangeStepProps) {
+  const theme = useTheme();
+  const [firstPage, setFirstPage] = useState('');
+  const [lastPage, setLastPage] = useState('');
+  const [rangeError, setRangeError] = useState<string | null>(null);
+
+  const submit = () => {
+    const parsed = parsePageRange(firstPage, lastPage);
+    if (!parsed.ok) {
+      setRangeError(parsed.error);
+      return;
+    }
+    setRangeError(null);
+    onStart(parsed.range);
+  };
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.flex}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <View style={styles.rangeColumn}>
+        <Text style={[styles.title, { color: theme.text }]}>Which pages?</Text>
+        <Text style={[styles.message, { color: theme.textSecondary }]}>
+          {sameBook
+            ? 'Read another stretch of the same PDF, no re-upload needed.'
+            : 'Import just the lesson you are on, or leave both blank for the whole book.'}
+        </Text>
+        <Surface style={styles.rangeCard}>
+          <View style={styles.rangeFields}>
+            <View style={styles.flex}>
+              <TextField
+                label="First page"
+                value={firstPage}
+                onChangeText={(text) => {
+                  setFirstPage(text);
+                  setRangeError(null);
+                }}
+                placeholder="1"
+                keyboardType="number-pad"
+              />
+            </View>
+            <View style={styles.flex}>
+              <TextField
+                label="Last page"
+                value={lastPage}
+                onChangeText={(text) => {
+                  setLastPage(text);
+                  setRangeError(null);
+                }}
+                placeholder="End"
+                keyboardType="number-pad"
+              />
+            </View>
+          </View>
+          <Text style={[styles.statusText, { color: theme.textSecondary }]}>
+            {
+              "Use the PDF's own page numbers, which can differ from the numbers printed on the page. Leave the last page blank to read to the end."
+            }
+          </Text>
+          {rangeError !== null && (
+            <Text style={[styles.statusText, { color: theme.danger }]}>{rangeError}</Text>
+          )}
+          {errorMessage !== null && (
+            <Text style={[styles.statusText, { color: theme.danger }]}>{errorMessage}</Text>
+          )}
+        </Surface>
+        <View style={styles.actions}>
+          <Button
+            label={busy ? 'Starting' : 'Start import'}
+            icon="play.fill"
+            loading={busy}
+            onPress={submit}
+          />
+          <Button label="Cancel" variant="ghost" onPress={onCancel} />
+        </View>
+      </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -84,6 +172,7 @@ interface ProgressStepProps {
   warnings: string[];
   onResume: () => void;
   onPause: () => void;
+  onImportMorePages: () => void;
   onImportAnother: () => void;
   onOpenLibrary: () => void;
 }
@@ -95,12 +184,13 @@ function ProgressStep({
   warnings,
   onResume,
   onPause,
+  onImportMorePages,
   onImportAnother,
   onOpenLibrary,
 }: ProgressStepProps) {
   const theme = useTheme();
   const done = importRecord.status === 'done';
-  const fraction = importProgressFraction(importRecord.totalPages, importRecord.nextPage);
+  const fraction = importProgressFraction(importRecord);
   const errorText = runError ?? importRecord.lastError;
   const summary = describeImportResult(importRecord.lessonsCreated, importRecord.cardsCreated);
 
@@ -108,14 +198,19 @@ function ProgressStep({
     <View style={styles.progressColumn}>
       {running && <KeepAwakeWhileRunning />}
       <Surface style={styles.progressCard}>
-        <Text style={[styles.title, { color: theme.text }]}>
-          {done ? 'Import finished' : 'Importing the book'}
-        </Text>
+        <View style={styles.progressHeading}>
+          <Text style={[styles.title, { color: theme.text }]}>
+            {done ? 'Import finished' : 'Importing the book'}
+          </Text>
+          <Text style={[styles.statusText, { color: theme.textSecondary }]}>
+            {describeImportRange(importRecord)}
+          </Text>
+        </View>
         <ProgressBar progress={done ? 1 : (fraction ?? 0)} />
         <Text style={[styles.message, { color: theme.textSecondary }]}>
           {done
             ? `Added ${summary}.`
-            : `${describeImportProgress(importRecord.totalPages, importRecord.nextPage)} · ${summary} so far`}
+            : `${describeImportProgress(importRecord)} · ${summary} so far`}
         </Text>
         {running && (
           <Text style={[styles.statusText, { color: theme.textSecondary }]}>
@@ -134,6 +229,12 @@ function ProgressStep({
       {done ? (
         <View style={styles.actions}>
           <Button label="See your library" icon="books.vertical" onPress={onOpenLibrary} />
+          <Button
+            label="Import more pages"
+            icon="plus"
+            variant="secondary"
+            onPress={onImportMorePages}
+          />
           <Button label="Import another PDF" variant="ghost" onPress={onImportAnother} />
         </View>
       ) : running ? (
@@ -149,17 +250,26 @@ function ProgressStep({
   );
 }
 
+/**
+ * A book waiting for its page range: freshly picked and still local, or one
+ * already in storage when more pages of the same PDF are being imported.
+ */
+type PendingBook =
+  { localUri: string; storagePath: null } | { localUri: null; storagePath: string };
+
 export function PdfImportScreen() {
   const router = useRouter();
   const runner = usePdfImportRunner();
+  const [pendingBook, setPendingBook] = useState<PendingBook | null>(null);
   const [pickingAnother, setPickingAnother] = useState(false);
 
-  const uploadMutation = useMutation({
-    mutationFn: async (uri: string) => {
-      const path = await uploadPdf(uri);
-      return createPdfImport(path);
+  const startMutation = useMutation({
+    mutationFn: async ({ book, range }: { book: PendingBook; range: ImportPageRange }) => {
+      const path = book.storagePath === null ? await uploadPdf(book.localUri) : book.storagePath;
+      return createPdfImport(path, range);
     },
     onSuccess: (created) => {
+      setPendingBook(null);
       setPickingAnother(false);
       runner.reload();
       runner.start(created.id);
@@ -167,20 +277,34 @@ export function PdfImportScreen() {
   });
 
   const record = runner.importRecord;
-  const showPicker = record === null || (record.status === 'done' && pickingAnother);
 
   let body;
   if (runner.loading) {
     body = <LoadingState label="Checking your imports" />;
   } else if (runner.loadError !== null) {
     body = <ErrorState message={runner.loadError} onRetry={runner.reload} />;
-  } else if (showPicker || record === null) {
+  } else if (pendingBook !== null) {
+    body = (
+      <RangeStep
+        sameBook={pendingBook.storagePath !== null}
+        busy={startMutation.isPending}
+        errorMessage={startMutation.isError ? startMutation.error.message : null}
+        onCancel={() => {
+          setPendingBook(null);
+          setPickingAnother(false);
+          startMutation.reset();
+        }}
+        onStart={(range) => {
+          startMutation.mutate({ book: pendingBook, range });
+        }}
+      />
+    );
+  } else if (record === null || pickingAnother) {
     body = (
       <PickStep
-        busy={uploadMutation.isPending}
-        errorMessage={uploadMutation.isError ? uploadMutation.error.message : null}
         onPicked={(uri) => {
-          uploadMutation.mutate(uri);
+          startMutation.reset();
+          setPendingBook({ localUri: uri, storagePath: null });
         }}
       />
     );
@@ -195,6 +319,10 @@ export function PdfImportScreen() {
           runner.start(record.id);
         }}
         onPause={runner.pause}
+        onImportMorePages={() => {
+          startMutation.reset();
+          setPendingBook({ localUri: null, storagePath: record.storagePath });
+        }}
         onImportAnother={() => {
           setPickingAnother(true);
         }}
@@ -219,6 +347,9 @@ export function PdfImportScreen() {
 }
 
 const styles = StyleSheet.create({
+  flex: {
+    flex: 1,
+  },
   pickColumn: {
     flex: 1,
     alignItems: 'center',
@@ -252,6 +383,20 @@ const styles = StyleSheet.create({
     fontWeight: 500,
     textAlign: 'center',
   },
+  rangeColumn: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: Spacing.four,
+    gap: Spacing.two,
+  },
+  rangeCard: {
+    gap: Spacing.three,
+    marginTop: Spacing.one,
+  },
+  rangeFields: {
+    flexDirection: 'row',
+    gap: Spacing.three,
+  },
   progressColumn: {
     flex: 1,
     justifyContent: 'center',
@@ -260,6 +405,9 @@ const styles = StyleSheet.create({
   },
   progressCard: {
     gap: Spacing.three,
+  },
+  progressHeading: {
+    gap: Spacing.one,
   },
   actions: {
     gap: Spacing.two,

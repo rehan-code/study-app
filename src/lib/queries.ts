@@ -8,7 +8,7 @@ import {
   missingLessonNames,
   type Lesson,
 } from '@/domain/lessons';
-import { pdfImportFromRow, type PdfImport } from '@/domain/pdf-import';
+import { pdfImportFromRow, type ImportPageRange, type PdfImport } from '@/domain/pdf-import';
 import {
   draftToCardSeed,
   validateDrafts,
@@ -368,10 +368,19 @@ export async function uploadPdf(localUri: string): Promise<string> {
   return path;
 }
 
-export async function createPdfImport(storagePath: string): Promise<PdfImport> {
+export async function createPdfImport(
+  storagePath: string,
+  range: ImportPageRange,
+): Promise<PdfImport> {
   const { data, error } = await getSupabase()
     .from('pdf_imports')
-    .insert({ storage_path: storagePath })
+    .insert({
+      storage_path: storagePath,
+      from_page: range.fromPage,
+      to_page: range.toPage,
+      // The resume cursor starts at the selection, not at the book's first page.
+      next_page: range.fromPage,
+    })
     .select('*')
     .single();
   if (error !== null) {

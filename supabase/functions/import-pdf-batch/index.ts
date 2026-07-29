@@ -49,6 +49,8 @@ const importRecordSchema = z.object({
   status: z.enum(['created', 'processing', 'done', 'failed']),
   total_pages: z.number().int().positive().nullable(),
   next_page: z.number().int().positive(),
+  from_page: z.number().int().positive(),
+  to_page: z.number().int().positive().nullable(),
   current_lesson: z.string().nullable(),
   lessons_created: z.number().int().nonnegative(),
   cards_created: z.number().int().nonnegative(),
@@ -205,11 +207,18 @@ function buildToolInputSchema(): Record<string, unknown> {
   };
 }
 
-function buildInstruction(currentLesson: string | null): string {
-  const continuation =
-    currentLesson === null
-      ? 'This batch starts at the very beginning of the book.'
-      : `The previous batch ended inside "${currentLesson}". If these pages start with table rows before any lesson heading, put them in a first group with continuesPreviousBatch=true.`;
+function buildInstruction(currentLesson: string | null, startsAtBookStart: boolean): string {
+  let continuation: string;
+  if (currentLesson !== null) {
+    continuation = `The previous batch ended inside "${currentLesson}". If these pages start with table rows before any lesson heading, put them in a first group with continuesPreviousBatch=true.`;
+  } else if (startsAtBookStart) {
+    continuation = 'This batch starts at the very beginning of the book.';
+  } else {
+    // A page-range import opens mid-book, so the first pages can land inside a
+    // lesson whose heading was never read.
+    continuation =
+      'This batch starts partway through the book and no earlier pages were read, so it may open in the middle of a lesson. If these pages start with table rows before any lesson heading, put them in a first group titled from whatever heading or running header is visible, with continuesPreviousBatch=true and lessonNumber set only if the lesson number is actually printed on these pages.';
+  }
   return [
     'You are reading consecutive pages of "Kashf Al-Mufradaat", a printed Arabic vocabulary curriculum. Each page of the PDF was extracted as positioned text items: [x= y=] coordinates followed by the text. Higher y is higher on the page; Arabic tables read right to left, so within a row larger x comes first.',
     continuation,
@@ -247,6 +256,7 @@ function mapAnthropicError(status: number, bodyText: string): HttpError {
 async function requestParseFromClaude(
   serializedPages: string,
   currentLesson: string | null,
+  startsAtBookStart: boolean,
 ): Promise<unknown> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) {
@@ -280,7 +290,7 @@ async function requestParseFromClaude(
             role: 'user',
             content: [
               { type: 'text', text: serializedPages },
-              { type: 'text', text: buildInstruction(currentLesson) },
+              { type: 'text', text: buildInstruction(currentLesson, startsAtBookStart) },
             ],
           },
         ],
@@ -449,7 +459,7 @@ Deno.serve(async (req) => {
   const { data: importRow, error: importError } = await supabase
     .from('pdf_imports')
     .select(
-      'id, storage_path, status, total_pages, next_page, current_lesson, lessons_created, cards_created, updated_at',
+      'id, storage_path, status, total_pages, next_page, from_page, to_page, current_lesson, lessons_created, cards_created, updated_at',
     )
     .eq('id', importId)
     .maybeSingle();
@@ -500,13 +510,30 @@ Deno.serve(async (req) => {
     }
 
     const pdfBytes = await downloadPdf(supabase, current.storage_path);
-    const toPage = fromPage + BATCH_PAGES - 1;
-    const { totalPages, pages } = await extractPositionedPages(pdfBytes, fromPage, toPage);
-    if (fromPage > totalPages) {
-      throw new HttpError('This import is already past the last page.', 409);
+    // The batch never reads past the end of the selected range.
+    const batchEnd =
+      current.to_page === null
+        ? fromPage + BATCH_PAGES - 1
+        : Math.min(fromPage + BATCH_PAGES - 1, current.to_page);
+    const { totalPages, pages } = await extractPositionedPages(pdfBytes, fromPage, batchEnd);
+    const selectionEnd =
+      current.to_page === null ? totalPages : Math.min(current.to_page, totalPages);
+    if (fromPage > selectionEnd) {
+      // A hand-typed range can start past the end of the PDF; say so instead of
+      // reporting the cursor message meant for an already-finished import.
+      throw new HttpError(
+        fromPage === current.from_page
+          ? `Page ${fromPage} is past the end of this PDF, which has ${totalPages} pages.`
+          : 'This import is already past the last page.',
+        409,
+      );
     }
 
-    const toolInput = await requestParseFromClaude(serializePages(pages), current.current_lesson);
+    const toolInput = await requestParseFromClaude(
+      serializePages(pages),
+      current.current_lesson,
+      fromPage === 1,
+    );
     const validated = importedPagesSchema.safeParse(toolInput);
     if (!validated.success) {
       console.error('import-pdf-batch: tool output failed validation', validated.error);
@@ -565,9 +592,9 @@ Deno.serve(async (req) => {
       openLesson = name;
     }
 
-    const lastProcessed = Math.min(toPage, totalPages);
+    const lastProcessed = Math.min(batchEnd, selectionEnd);
     const nextPage = lastProcessed + 1;
-    const done = nextPage > totalPages;
+    const done = nextPage > selectionEnd;
     // Keyed on the claim stamp: only the call that still owns the claim can
     // advance the cursor, so a superseded run fails loudly here instead of
     // double-counting a batch.

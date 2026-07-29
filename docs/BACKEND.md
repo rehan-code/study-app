@@ -156,10 +156,13 @@ curl -s -X POST "$SUPABASE_URL/functions/v1/import-pdf-batch" \
 ```
 
 Real imports are driven from the app (Scan tab -> Import book): the app uploads
-the PDF, inserts a `pdf_imports` row, then calls this function repeatedly. Each
-call reads the next page batch (positioned text via pdf.js, no rendering), has
-Claude return structured rows, writes lessons and cards, and advances
-`next_page`. Interrupting is safe; the next call resumes at the cursor.
+the PDF, inserts a `pdf_imports` row carrying the chosen page range, then calls
+this function repeatedly. Each call reads the next page batch (positioned text
+via pdf.js, no rendering), has Claude return structured rows, writes lessons and
+cards, and advances `next_page`. Batches never read outside `from_page`..`to_page`
+(`to_page` null means the end of the book), and the import is done once the
+cursor passes the end of that range. Interrupting is safe; the next call resumes
+at the cursor.
 
 ## 7. Troubleshooting
 

@@ -76,7 +76,7 @@ function ImportBookRow({ onPress }: { onPress: () => void }) {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel="Import the whole book"
+      accessibilityLabel="Import from the book"
       onPress={onPress}
       style={({ pressed }) => [styles.importRowWrap, { opacity: pressed ? 0.7 : 1 }]}
     >
@@ -86,10 +86,10 @@ function ImportBookRow({ onPress }: { onPress: () => void }) {
         </View>
         <View style={styles.rowText}>
           <Text style={[styles.rowTitle, { color: theme.text }]} numberOfLines={1}>
-            Import the whole book
+            Import from the book
           </Text>
           <Text style={[styles.rowSubtitle, { color: theme.textSecondary }]} numberOfLines={1}>
-            Turn the curriculum PDF into cards
+            Turn chosen PDF pages into cards
           </Text>
         </View>
         <SymbolView
