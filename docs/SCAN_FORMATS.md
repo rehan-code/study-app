@@ -5,8 +5,11 @@ full harakat over a printed table grid; a light "AndalusInstitute.com" watermark
 crosses the page and must be ignored by the parser.
 
 A logical table usually spans TWO photos (right page + left page of a spread).
-Rows align 1:1 across the pair and must be merged by row index. Upload flow
-therefore accepts page pairs; phrases pages may be single.
+Rows align 1:1 across the pair and must be merged by row index. One scan holds
+several spreads (up to 8 photos): each pair is transcribed on its own and the
+rows are concatenated in photo order, so a table running over several spreads
+comes back as one continuous row list. Phrases pages stand alone, one photo per
+page, and their rows concatenate the same way.
 
 Handwritten "LESSON N" markers appear BETWEEN rows, often mid-page: rows from a
 marker down to the next marker belong to lesson N, so one spread can span
@@ -55,10 +58,12 @@ Arabic phrase plus English meaning per row.
 
 ## Parsing pipeline
 
-`parse-scan` edge function sends the page photo(s) to Claude vision in one
-request and asks for strict JSON: ordered rows with per-column strings
-(preserving harakat exactly), plus detected lesson markers with the row index
-they precede. The answers are student homework, so the same request also checks
+`parse-scan` edge function sends each spread (or standalone page) to Claude
+vision in its own concurrent request and asks for strict JSON: ordered rows with
+per-column strings (preserving harakat exactly), plus detected lesson markers
+with the row index they precede. Each group numbers its rows from 0; the
+function concatenates the groups in photo order and shifts their lesson markers
+by the rows ahead of them. The answers are student homework, so the same request also checks
 each filled-in cell for genuine mistakes (wrong plural, wrong conjugation,
 wrong harakat) and reports them per row as corrections without touching the
 transcription. Output lands in `scans.parsed_rows`; the review screen lets the

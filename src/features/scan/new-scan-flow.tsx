@@ -14,12 +14,15 @@ import type { ScanKind } from '@/domain/cards';
 import { PhotoCropEditor } from '@/features/scan/photo-crop-editor';
 import {
   addPhotos,
+  groupHeading,
+  groupPhotos,
   MAX_SCAN_PAGES,
-  pageLabelForIndex,
+  pagesPerGroup,
+  photoLabel,
   remainingPhotoSlots,
   removePhotoAt,
   replacePhotoAt,
-  swapPhotos,
+  swapGroupPages,
   type ScanPhoto,
 } from '@/features/scan/photo-selection';
 import { SCAN_KIND_INFO, SCAN_KIND_INFOS, type ScanKindInfo } from '@/features/scan/scan-kind-info';
@@ -86,6 +89,8 @@ function PhotosStep({ info, photos, onPhotosChange, onSubmit }: PhotosStepProps)
   const remaining = remainingPhotoSlots(photos);
   const croppingPhoto = cropIndex === null ? undefined : photos[cropIndex];
   const pageLabels = info.pages.map((page) => page.label);
+  const perGroup = pagesPerGroup(info.kind);
+  const groups = groupPhotos(photos, perGroup);
 
   const takePhoto = async () => {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
@@ -166,54 +171,78 @@ function PhotosStep({ info, photos, onPhotosChange, onSubmit }: PhotosStepProps)
     <View style={styles.stepRoot}>
       <ScrollView contentContainerStyle={styles.stepContent}>
         <Text style={[styles.prompt, { color: theme.textSecondary }]}>{info.photoHint}</Text>
-        {photos.map((photo, index) => (
-          <Surface key={`${photo.uri}-${index}`} padded={false} style={styles.photoCard}>
-            <Image source={{ uri: photo.uri }} style={styles.photoImage} contentFit="cover" />
-            <View style={styles.photoFooter}>
-              <View style={styles.photoLabels}>
-                <Text style={[styles.photoLabel, { color: theme.text }]}>
-                  {pageLabelForIndex(index, pageLabels)}
-                </Text>
-                {info.pages[index] !== undefined && (
-                  <Text style={[styles.photoHintText, { color: theme.textSecondary }]}>
-                    {info.pages[index].hint}
-                  </Text>
-                )}
-              </View>
-              <View style={styles.photoActions}>
-                <IconButton
-                  icon="crop"
-                  accessibilityLabel={`Crop ${pageLabelForIndex(index, pageLabels)}`}
-                  size={16}
-                  themeColor="textSecondary"
+        {groups.map((group) => {
+          const heading = groupHeading(info.kind, group.index, groups.length);
+          return (
+            <View key={`group-${group.index}`} style={styles.group}>
+              {heading !== null && (
+                <Text style={[styles.groupHeading, { color: theme.textSecondary }]}>{heading}</Text>
+              )}
+              {group.photos.map((photo, indexInGroup) => {
+                const index = group.startIndex + indexInGroup;
+                const label = photoLabel(
+                  info.kind,
+                  group.index,
+                  indexInGroup,
+                  groups.length,
+                  pageLabels,
+                );
+                const spokenLabel = heading === null ? label : `${heading}, ${label}`;
+                const pageHint = info.pages[indexInGroup]?.hint;
+                return (
+                  <Surface key={`${photo.uri}-${index}`} padded={false} style={styles.photoCard}>
+                    <Image
+                      source={{ uri: photo.uri }}
+                      style={styles.photoImage}
+                      contentFit="cover"
+                    />
+                    <View style={styles.photoFooter}>
+                      <View style={styles.photoLabels}>
+                        <Text style={[styles.photoLabel, { color: theme.text }]}>{label}</Text>
+                        {pageHint !== undefined && (
+                          <Text style={[styles.photoHintText, { color: theme.textSecondary }]}>
+                            {pageHint}
+                          </Text>
+                        )}
+                      </View>
+                      <View style={styles.photoActions}>
+                        <IconButton
+                          icon="crop"
+                          accessibilityLabel={`Crop ${spokenLabel}`}
+                          size={16}
+                          themeColor="textSecondary"
+                          onPress={() => {
+                            setCropIndex(index);
+                          }}
+                        />
+                        <IconButton
+                          icon="xmark"
+                          accessibilityLabel={`Remove ${spokenLabel}`}
+                          size={16}
+                          themeColor="textSecondary"
+                          onPress={() => {
+                            onPhotosChange(removePhotoAt(photos, index));
+                          }}
+                        />
+                      </View>
+                    </View>
+                  </Surface>
+                );
+              })}
+              {perGroup > 1 && group.photos.length === perGroup && (
+                <Button
+                  label="Swap pages"
+                  icon="arrow.up.arrow.down"
+                  variant="ghost"
                   onPress={() => {
-                    setCropIndex(index);
+                    onPhotosChange(swapGroupPages(photos, group.startIndex));
                   }}
                 />
-                <IconButton
-                  icon="xmark"
-                  accessibilityLabel={`Remove ${pageLabelForIndex(index, pageLabels)}`}
-                  size={16}
-                  themeColor="textSecondary"
-                  onPress={() => {
-                    onPhotosChange(removePhotoAt(photos, index));
-                  }}
-                />
-              </View>
+              )}
             </View>
-          </Surface>
-        ))}
-        {photos.length === MAX_SCAN_PAGES && (
-          <Button
-            label="Swap pages"
-            icon="arrow.up.arrow.down"
-            variant="ghost"
-            onPress={() => {
-              onPhotosChange(swapPhotos(photos));
-            }}
-          />
-        )}
-        {remaining > 0 && (
+          );
+        })}
+        {remaining > 0 ? (
           <View style={styles.pickButtons}>
             <Button
               label="Take photo"
@@ -234,6 +263,10 @@ function PhotosStep({ info, photos, onPhotosChange, onSubmit }: PhotosStepProps)
               }}
             />
           </View>
+        ) : (
+          <Text style={[styles.photoHintText, { color: theme.textSecondary, textAlign: 'center' }]}>
+            {`That is the most one scan can hold (${MAX_SCAN_PAGES} photos). Upload these, then start another scan.`}
+          </Text>
         )}
         {pickerError !== null && (
           <Text style={[styles.pickerError, { color: theme.danger }]}>{pickerError}</Text>
@@ -408,6 +441,16 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 19,
     fontWeight: 500,
+  },
+  group: {
+    gap: Spacing.two,
+  },
+  groupHeading: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: 600,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   photoCard: {
     gap: 0,

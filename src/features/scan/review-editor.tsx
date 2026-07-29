@@ -19,7 +19,7 @@ import { EmptyState } from '@/components/empty-state';
 import { IconButton } from '@/components/icon-button';
 import { Surface } from '@/components/surface';
 import { Radius, Spacing } from '@/constants/theme';
-import type { ParsedScan } from '@/domain/parsed-scan';
+import { visibleWarnings, type ParsedScan } from '@/domain/parsed-scan';
 import { parsedToDrafts, validateDrafts, type ReviewDraft } from '@/domain/scan-review';
 import type { Scan } from '@/domain/scans';
 import { LessonPicker } from '@/features/scan/lesson-picker';
@@ -229,7 +229,8 @@ export function ReviewEditor({ scan, parsed }: ReviewEditorProps) {
 
   const bulk = bulkLessonValue(drafts);
   const bulkLabel = bulk.state === 'mixed' ? 'Mixed' : (bulk.name ?? 'No lesson');
-  const showWarnings = parsed.warnings.length > 0 && !warningsDismissed;
+  const warnings = visibleWarnings(parsed.warnings);
+  const showWarnings = warnings.length > 0 && !warningsDismissed;
   const flaggedCount = correctionCount(included);
   const showCorrections = flaggedCount > 0 && !correctionsDismissed;
 
@@ -267,7 +268,7 @@ export function ReviewEditor({ scan, parsed }: ReviewEditorProps) {
           <View style={[styles.warnings, { backgroundColor: theme.accentSoft }]}>
             <SymbolView name="exclamationmark.triangle" size={18} tintColor={theme.accent} />
             <View style={styles.warningsText}>
-              {parsed.warnings.map((warning) => (
+              {warnings.map((warning) => (
                 <Text key={warning} style={[styles.warningLine, { color: theme.text }]}>
                   {warning}
                 </Text>

@@ -226,6 +226,7 @@ function buildInstruction(currentLesson: string | null): string {
     '- Use one lessons[] group per lesson heading that appears in these pages, in reading order. Rows before the first heading go into a continuesPreviousBatch=true group.',
     '- Page numbers, decorative text, watermarks, and section dividers are not content.',
     '- Report anything ambiguous in warnings as short English strings.',
+    '- Never report an empty or missing cell in warnings. Blank cells are normal in these tables, especially synonym, antonym, plural, and participle columns, and a whole column can be empty.',
     `Call the ${TOOL_NAME} tool exactly once with the complete result.`,
   ].join('\n');
 }

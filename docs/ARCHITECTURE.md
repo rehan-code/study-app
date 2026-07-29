@@ -318,14 +318,23 @@ with a 4xx/5xx status and a message safe to show in the UI. Shared helpers in
 ### parse-scan
 
 Request `{ scanId: string }`. Load scan (404 if missing), reject if status is `reviewed`,
-set `parsing`, download `page_paths` from the scans bucket, send all pages in ONE Anthropic
-messages request (model from `ANTHROPIC_MODEL`, default `claude-sonnet-5`; key from
-`ANTHROPIC_API_KEY`) with a forced tool call whose input schema matches the parsed-scan
-contract. The prompt must encode docs/SCAN_FORMATS.md: spreads merge row-by-row across two
-photos in order, field keys per kind exactly as in `PARSED_FIELD_KEYS`, meaning in English,
+set `parsing`, download `page_paths` (1 to `MAX_SCAN_PAGES`, 8) from the scans bucket, then
+split them into groups: two photos per group for nouns/verbs (right page + left page of one
+spread), one per group for phrases. Each group is its own Anthropic messages request (model
+from `ANTHROPIC_MODEL`, default `claude-sonnet-5`; key from `ANTHROPIC_API_KEY`) with a
+forced tool call whose input schema matches the parsed-scan contract, and the groups run
+concurrently, so a four-spread scan costs about the wall clock of one. Each group numbers
+its rows from 0; `mergeParsed` concatenates the groups in photo order, shifts every
+`lessonMarker.beforeRow` by the rows already ahead of it, and prefixes each warning with its
+group ("Spread 2: ..."). The prompt must encode docs/SCAN_FORMATS.md: a spread merges
+row-by-row across its two photos, field keys per kind exactly as in `PARSED_FIELD_KEYS`, meaning in English,
 preserve harakat exactly, blank/dash cells null, detect handwritten LESSON markers between
 rows into `lessonMarkers` (beforeRow = index of the first row at/after the marker), ignore
-the watermark, margin notes into `note`, uncertainties into `warnings`. The prompt also
+the watermark, margin notes into `note`, uncertainties into `warnings`. Blank cells are
+never a warning: whole synonym, antonym, plural, and participle columns are routinely empty,
+so the prompt forbids reporting them and `visibleWarnings` (src/domain/parsed-scan.ts) drops
+any that slip through before the review banner renders, which also cleans up scans parsed
+before that rule existed. The prompt also
 asks the model to CHECK each filled-in answer (right plural/conjugation/masdar/participle,
 right harakat) and report confident mistakes per row in `corrections` as
 `{ field, suggested, reason }`; `fields` still carries the exact transcription, and
@@ -346,24 +355,24 @@ captions, typography, watermarks). Call fal.ai (`FAL_KEY`; model id from `FAL_MO
 
 ## Screen map
 
-| Route                          | Purpose                                                                                                                                                                                                               |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/app/_layout.tsx`          | Providers (QueryClientProvider, theme), splash handling, gates: unconfigured env -> setup screen; no session -> (auth); else (tabs).                                                                                  |
-| `src/app/(auth)/sign-in.tsx`   | Email + password sign in with a sign-up toggle. Friendly errors, loading state, email-confirmation notice after sign up.                                                                                              |
-| `src/app/(tabs)/_layout.tsx`   | Tabs: Study (index), Library, Scan, Settings. NativeTabs with SF symbol icons if supported (verify against node_modules/expo-router types), otherwise classic Tabs with expo-symbols icons.                           |
-| `src/app/(tabs)/index.tsx`     | Home: greeting, due/new counts for the current filter, lesson filter chips (all lessons + NO_LESSON_ID), Start studying button, Quiz button, empty states pointing to the Scan tab.                                   |
-| `src/app/(tabs)/library.tsx`   | Lessons with card counts (plus a "No lesson" group), tap into lesson detail.                                                                                                                                          |
-| `src/app/(tabs)/scans.tsx`     | Scan history list (kind, pages, status badge, date) + New scan button. Tap: parsed -> review, failed -> error + retry parse, reviewed -> summary, uploaded/parsing -> progress.                                       |
-| `src/app/(tabs)/settings.tsx`  | Account (email, sign out), AI images toggle, new-cards-per-session stepper, app version.                                                                                                                              |
-| `src/app/study/session.tsx`    | Flashcard session for the current filter (modal, full screen).                                                                                                                                                        |
-| `src/app/quiz/index.tsx`       | Quiz setup: question count (5/10/20), kind toggles (present on by default), start. Shows eligible-question availability.                                                                                              |
-| `src/app/quiz/session.tsx`     | Quiz runner + results.                                                                                                                                                                                                |
-| `src/app/scan/new.tsx`         | Kind picker (three friendly cards explaining each layout), pick/take 1-2 photos in right-page-then-left-page order, reorder/remove, upload + parse with progress, then navigate to review.                            |
-| `src/app/scan/import-pdf.tsx`  | Whole-book import: pick the curriculum PDF, upload, then drive `import-pdf-batch` one page batch at a time with progress, pause/resume, and a resumable cursor in `pdf_imports`.                                      |
-| `src/app/scan/[id]/review.tsx` | Review parsed rows: editable fields per FIELD_LABELS, meaning, per-row lesson assignment seeded from markers, bulk lesson set, exclude row, validation, save all, then background image generation for the new cards. |
-| `src/app/lesson/[id].tsx`      | Cards in a lesson; rename/delete lesson.                                                                                                                                                                              |
-| `src/app/card/[id].tsx`        | Card detail: edit fields + meaning, image section (preview, generate/regenerate, per-card toggle), SRS stats, reset progress, change lesson, delete.                                                                  |
-| `src/app/+not-found.tsx`       | Friendly fallback linking home.                                                                                                                                                                                       |
+| Route                          | Purpose                                                                                                                                                                                                                                                |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/app/_layout.tsx`          | Providers (QueryClientProvider, theme), splash handling, gates: unconfigured env -> setup screen; no session -> (auth); else (tabs).                                                                                                                   |
+| `src/app/(auth)/sign-in.tsx`   | Email + password sign in with a sign-up toggle. Friendly errors, loading state, email-confirmation notice after sign up.                                                                                                                               |
+| `src/app/(tabs)/_layout.tsx`   | Tabs: Study (index), Library, Scan, Settings. NativeTabs with SF symbol icons if supported (verify against node_modules/expo-router types), otherwise classic Tabs with expo-symbols icons.                                                            |
+| `src/app/(tabs)/index.tsx`     | Home: greeting, due/new counts for the current filter, lesson filter chips (all lessons + NO_LESSON_ID), Start studying button, Quiz button, empty states pointing to the Scan tab.                                                                    |
+| `src/app/(tabs)/library.tsx`   | Lessons with card counts (plus a "No lesson" group), tap into lesson detail.                                                                                                                                                                           |
+| `src/app/(tabs)/scans.tsx`     | Scan history list (kind, pages, status badge, date) + New scan button. Tap: parsed -> review, failed -> error + retry parse, reviewed -> summary, uploaded/parsing -> progress.                                                                        |
+| `src/app/(tabs)/settings.tsx`  | Account (email, sign out), AI images toggle, new-cards-per-session stepper, app version.                                                                                                                                                               |
+| `src/app/study/session.tsx`    | Flashcard session for the current filter (modal, full screen).                                                                                                                                                                                         |
+| `src/app/quiz/index.tsx`       | Quiz setup: question count (5/10/20), kind toggles (present on by default), start. Shows eligible-question availability.                                                                                                                               |
+| `src/app/quiz/session.tsx`     | Quiz runner + results.                                                                                                                                                                                                                                 |
+| `src/app/scan/new.tsx`         | Kind picker (three friendly cards explaining each layout), pick/take up to 8 photos grouped into right-page-then-left-page spreads (phrases: one page per group), per-spread swap, crop/remove, upload + parse with progress, then navigate to review. |
+| `src/app/scan/import-pdf.tsx`  | Whole-book import: pick the curriculum PDF, upload, then drive `import-pdf-batch` one page batch at a time with progress, pause/resume, and a resumable cursor in `pdf_imports`.                                                                       |
+| `src/app/scan/[id]/review.tsx` | Review parsed rows: editable fields per FIELD_LABELS, meaning, per-row lesson assignment seeded from markers, bulk lesson set, exclude row, validation, save all, then background image generation for the new cards.                                  |
+| `src/app/lesson/[id].tsx`      | Cards in a lesson; rename/delete lesson.                                                                                                                                                                                                               |
+| `src/app/card/[id].tsx`        | Card detail: edit fields + meaning, image section (preview, generate/regenerate, per-card toggle), SRS stats, reset progress, change lesson, delete.                                                                                                   |
+| `src/app/+not-found.tsx`       | Friendly fallback linking home.                                                                                                                                                                                                                        |
 
 Feature components live in `src/features/{study,quiz,scan,library}/`.
 

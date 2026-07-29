@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { visibleWarnings } from '@/domain/parsed-scan';
 import type { ImportBatchResult, PdfImport } from '@/domain/pdf-import';
 import { importPdfBatch } from '@/lib/api';
 import { getLatestPdfImport, queryKeys } from '@/lib/queries';
@@ -86,7 +87,7 @@ export function usePdfImportRunner(): PdfImportRunner {
           return;
         }
         applyResult(importId, result);
-        setLastWarnings(result.batch?.warnings ?? []);
+        setLastWarnings(visibleWarnings(result.batch?.warnings ?? []));
         if (result.status === 'done') {
           setRunning(false);
           loopingRef.current = false;

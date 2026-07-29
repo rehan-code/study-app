@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import { phraseFieldsSchema, verbFieldsSchema, vocabFieldsSchema } from '@/domain/cards';
 import {
+  isEmptyCellWarning,
   lessonMarkerSchema,
   PARSED_FIELD_KEYS,
   parsedRowSchema,
   parsedScanSchema,
   rowCorrectionSchema,
+  visibleWarnings,
 } from '@/domain/parsed-scan';
 
 const validParsed = {
@@ -151,6 +153,65 @@ describe('lessonMarkerSchema', () => {
     expect(lessonMarkerSchema.safeParse({ beforeRow: -1, name: 'LESSON 9' }).success).toBe(false);
     expect(lessonMarkerSchema.safeParse({ beforeRow: 1.5, name: 'LESSON 9' }).success).toBe(false);
     expect(lessonMarkerSchema.safeParse({ beforeRow: 0, name: '' }).success).toBe(false);
+  });
+});
+
+describe('isEmptyCellWarning', () => {
+  it('drops notes that only report blank cells', () => {
+    const noise = [
+      'The synonym and antonym columns are empty for every row.',
+      'Rows 3 to 9 have blank الجمع الثاني cells.',
+      'Most plural2 cells are unfilled.',
+      'Row 4: no imperative given.',
+      'اسم الفاعل and اسم المفعول are missing throughout the spread.',
+      'Spread 2: several meaning cells were left out.',
+      'The masdar column is absent on this page.',
+    ];
+    for (const warning of noise) {
+      expect(isEmptyCellWarning(warning)).toBe(true);
+    }
+  });
+
+  it('keeps notes about something the reader still needs to know', () => {
+    const real = [
+      'Row 2 is unreadable.',
+      'The harakat on يَتَّصِلُ are ambiguous.',
+      'Row 7 is blank on the right page but filled on the left, so the merge is uncertain.',
+      'The last cell is missing its harakat.',
+      'The left page is cut off, so row 12 may be missing.',
+      'Row counts differ between the pages, so the alignment could be wrong.',
+      'Spread 2: the bottom of the page is blurry.',
+    ];
+    for (const warning of real) {
+      expect(isEmptyCellWarning(warning)).toBe(false);
+    }
+  });
+
+  it('keeps notes that mention nothing about emptiness', () => {
+    expect(isEmptyCellWarning('The lesson marker between rows 4 and 5 is hard to read.')).toBe(
+      false,
+    );
+  });
+});
+
+describe('visibleWarnings', () => {
+  it('filters the blank-cell notes out and keeps the order of the rest', () => {
+    expect(
+      visibleWarnings([
+        'The antonym column is empty.',
+        'Row 2 is unreadable.',
+        'Row 4: no plural given.',
+        'The harakat on row 6 are ambiguous.',
+      ]),
+    ).toEqual(['Row 2 is unreadable.', 'The harakat on row 6 are ambiguous.']);
+  });
+
+  it('returns an empty list when every note was noise', () => {
+    expect(visibleWarnings(['Several synonym cells are blank.'])).toEqual([]);
+  });
+
+  it('passes an empty list through', () => {
+    expect(visibleWarnings([])).toEqual([]);
   });
 });
 

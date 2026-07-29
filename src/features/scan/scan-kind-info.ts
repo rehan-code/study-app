@@ -17,7 +17,7 @@ export interface ScanKindInfo {
 }
 
 const SPREAD_PHOTO_HINT =
-  'The book reads right to left, so the spread begins on the right-hand page. Photograph that one first, then the left-hand page.';
+  'The book reads right to left, so each spread begins on the right-hand page. Photograph that one first, then the left-hand page. Add another pair for every further spread; they are read in order as one long table.';
 
 export const SCAN_KIND_INFO: Record<ScanKind, ScanKindInfo> = {
   nouns: {
@@ -47,11 +47,9 @@ export const SCAN_KIND_INFO: Record<ScanKind, ScanKindInfo> = {
     label: 'Phrases page',
     description: 'An Arabic phrase and its English meaning on each row.',
     icon: 'text.quote',
-    photoHint: 'Phrases pages are often a single photo. Add a second only for a full spread.',
-    pages: [
-      { label: 'First page', hint: 'Usually the only photo you need.' },
-      { label: 'Second page', hint: 'Only for phrases continuing across the spread.' },
-    ],
+    photoHint:
+      'One photo per phrases page. Add as many as you like; their rows are read top to bottom, page after page.',
+    pages: [{ label: 'Phrases page', hint: 'Arabic phrase and English meaning on each row.' }],
   },
 };
 

@@ -20,8 +20,11 @@ import {
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_MODEL = 'claude-sonnet-5';
+// Per group, not per scan: each spread is its own request.
 const MAX_OUTPUT_TOKENS = 16000;
 const TOOL_NAME = 'record_parsed_scan';
+// Mirrors MAX_SCAN_PAGES in the app: four spreads, or eight standalone pages.
+const MAX_SCAN_PAGES = 8;
 // Anthropic rejects images above ~5MB; catching it here gives a clearer message.
 const MAX_PAGE_BYTES = 5 * 1024 * 1024;
 // Aborts well before the edge runtime's wall clock limit kills the function,
@@ -177,6 +180,7 @@ const PARSE_RULES = [
   '- A margin annotation next to a row (for example a note about a mistake in the book) goes into that row\'s "note". Otherwise "note" is null.',
   '- A light "AndalusInstitute.com" watermark crosses the page. Ignore it completely; it is not content.',
   '- Put anything you are unsure about (an unreadable cell, ambiguous harakat, an uncertain row merge) into "warnings" as short English strings.',
+  '- NEVER warn about empty cells. Blank and "-" cells are normal and expected here: synonym, antonym, plural, imperative, masdar, and participle columns are often mostly or entirely empty, and that is not worth reporting. Say nothing about a cell just because it is blank, and never summarize how many cells were left unfilled.',
   '- Emit rows in top to bottom order starting at index 0. Include every row that has any handwriting; skip rows that are completely empty.',
 ].join('\n');
 
@@ -190,14 +194,56 @@ const CHECK_RULES = [
   '- A row with no mistakes has an empty "corrections" array.',
 ].join('\n');
 
-function buildInstruction(kind: ScanKind, pageCount: number): string {
-  const merge =
-    pageCount === 2
-      ? 'The two photos are the RIGHT page and the LEFT page of one workbook spread. The table rows continue across the spread: physical row N on the right page and physical row N on the left page are the SAME row. Merge them by row index, right page columns first, then left page columns.'
-      : 'The single photo is one workbook page.';
+/**
+ * Photos per group. Nouns and verbs tables run across a right/left spread, so
+ * their photos pair up; phrases pages stand alone, one group each.
+ */
+function pagesPerGroup(kind: ScanKind): number {
+  return kind === 'phrases' ? 1 : 2;
+}
+
+/** Splits the page list into the groups that are transcribed together. */
+function groupPages<T>(pages: T[], perGroup: number): T[][] {
+  const size = Math.max(1, perGroup);
+  const groups: T[][] = [];
+  for (let start = 0; start < pages.length; start += size) {
+    groups.push(pages.slice(start, start + size));
+  }
+  return groups;
+}
+
+/** What this group of photos is, so its rows merge the right way. */
+function describeGroup(kind: ScanKind, pagesInGroup: number, index: number, total: number): string {
+  const lines: string[] = [];
+  if (total > 1) {
+    const noun = pagesPerGroup(kind) === 1 ? 'page' : 'spread';
+    lines.push(
+      `These photos are ${noun} ${index + 1} of ${total} from one longer table. Transcribe ONLY the photos above and number its rows from 0; the app joins the ${noun}s together afterwards, so never guess at rows you cannot see.`,
+    );
+  }
+  if (pagesInGroup === 2) {
+    lines.push(
+      'The two photos are the RIGHT page and the LEFT page of one workbook spread. The table rows continue across the spread: physical row N on the right page and physical row N on the left page are the SAME row. Merge them by row index, right page columns first, then left page columns.',
+    );
+  } else if (pagesPerGroup(kind) === 2) {
+    lines.push(
+      'This photo is a right-hand page with no facing left page, so every left page column is null.',
+    );
+  } else {
+    lines.push('The single photo is one workbook page.');
+  }
+  return lines.join(' ');
+}
+
+function buildInstruction(
+  kind: ScanKind,
+  pagesInGroup: number,
+  index: number,
+  total: number,
+): string {
   return [
-    'You are transcribing a photographed page of a handwritten Arabic vocabulary workbook (Andalus Institute). The answers are handwritten with full harakat over a printed table grid.',
-    merge,
+    'You are transcribing photographed pages of a handwritten Arabic vocabulary workbook (Andalus Institute). The answers are handwritten with full harakat over a printed table grid.',
+    describeGroup(kind, pagesInGroup, index, total),
     COLUMN_GUIDES[kind],
     PARSE_RULES,
     CHECK_RULES,
@@ -205,20 +251,52 @@ function buildInstruction(kind: ScanKind, pageCount: number): string {
   ].join('\n\n');
 }
 
-function buildContentBlocks(kind: ScanKind, pages: string[]): unknown[] {
+function photoLabel(indexInGroup: number, pagesInGroup: number): string {
+  if (pagesInGroup === 1) {
+    return 'The page photo:';
+  }
+  const side = indexInGroup === 0 ? 'RIGHT' : 'LEFT';
+  return `Photo ${indexInGroup + 1} of ${pagesInGroup}, the ${side} page of the spread:`;
+}
+
+function buildContentBlocks(
+  kind: ScanKind,
+  pages: string[],
+  index: number,
+  total: number,
+): unknown[] {
   const blocks: unknown[] = [];
-  pages.forEach((data, index) => {
-    const label =
-      pages.length === 2
-        ? index === 0
-          ? 'Photo 1 of 2, the RIGHT page of the spread:'
-          : 'Photo 2 of 2, the LEFT page of the same spread:'
-        : 'The page photo:';
-    blocks.push({ type: 'text', text: label });
+  pages.forEach((data, indexInGroup) => {
+    blocks.push({ type: 'text', text: photoLabel(indexInGroup, pages.length) });
     blocks.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } });
   });
-  blocks.push({ type: 'text', text: buildInstruction(kind, pages.length) });
+  blocks.push({ type: 'text', text: buildInstruction(kind, pages.length, index, total) });
   return blocks;
+}
+
+/** Human name for a group, used to attribute warnings back to their photos. */
+function groupLabel(kind: ScanKind, index: number): string {
+  return `${pagesPerGroup(kind) === 1 ? 'Page' : 'Spread'} ${index + 1}`;
+}
+
+/**
+ * Joins per-group results into one scan: rows concatenate in photo order, and
+ * each group's lesson markers shift by the rows already ahead of them, so
+ * beforeRow keeps pointing at the same row once the groups are stitched.
+ */
+function mergeParsed(kind: ScanKind, parts: ParsedScan[]): ParsedScan {
+  const merged: ParsedScan = { kind, rows: [], lessonMarkers: [], warnings: [] };
+  parts.forEach((part, index) => {
+    const offset = merged.rows.length;
+    merged.rows.push(...part.rows);
+    for (const marker of part.lessonMarkers) {
+      merged.lessonMarkers.push({ ...marker, beforeRow: marker.beforeRow + offset });
+    }
+    for (const warning of part.warnings) {
+      merged.warnings.push(parts.length > 1 ? `${groupLabel(kind, index)}: ${warning}` : warning);
+    }
+  });
+  return merged;
 }
 
 function mapAnthropicError(status: number, bodyText: string): HttpError {
@@ -234,7 +312,12 @@ function mapAnthropicError(status: number, bodyText: string): HttpError {
   return new HttpError(GENERIC_PARSE_ERROR, 502);
 }
 
-async function requestParseFromClaude(kind: ScanKind, pages: string[]): Promise<unknown> {
+async function requestParseFromClaude(
+  kind: ScanKind,
+  pages: string[],
+  index: number,
+  total: number,
+): Promise<unknown> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) {
     throw new HttpError("AI parsing isn't set up yet. Add the ANTHROPIC_API_KEY secret.", 500);
@@ -260,7 +343,7 @@ async function requestParseFromClaude(kind: ScanKind, pages: string[]): Promise<
           },
         ],
         tool_choice: { type: 'tool', name: TOOL_NAME },
-        messages: [{ role: 'user', content: buildContentBlocks(kind, pages) }],
+        messages: [{ role: 'user', content: buildContentBlocks(kind, pages, index, total) }],
       }),
     },
     ANTHROPIC_TIMEOUT_MS,
@@ -374,8 +457,8 @@ Deno.serve(async (req) => {
   if (scan.data.status === 'parsing' && !isParseStale(scan.data.parse_started_at)) {
     return errorResponse('This scan is already being read. Wait for it to finish.', 409);
   }
-  if (scan.data.page_paths.length < 1 || scan.data.page_paths.length > 2) {
-    return errorResponse('A scan needs one or two page photos.', 400);
+  if (scan.data.page_paths.length < 1 || scan.data.page_paths.length > MAX_SCAN_PAGES) {
+    return errorResponse(`A scan needs between one and ${MAX_SCAN_PAGES} page photos.`, 400);
   }
 
   // Compare-and-swap on the fields read above so two concurrent parse
@@ -400,8 +483,19 @@ Deno.serve(async (req) => {
 
   try {
     const pages = await downloadPagesAsBase64(supabase, scan.data.page_paths);
-    const toolInput = await requestParseFromClaude(scan.data.kind, pages);
-    const parsed = normalizeParsed(scan.data.kind, toolInput);
+    // One request per spread rather than one for the whole scan: each stays the
+    // size the prompt was tuned for, well inside the output and timeout budgets,
+    // and the groups run together so a four-spread scan is no slower than one.
+    const groups = groupPages(pages, pagesPerGroup(scan.data.kind));
+    const parts = await Promise.all(
+      groups.map(async (group, index) =>
+        normalizeParsed(
+          scan.data.kind,
+          await requestParseFromClaude(scan.data.kind, group, index, groups.length),
+        ),
+      ),
+    );
+    const parsed = mergeParsed(scan.data.kind, parts);
     const { error: saveError } = await supabase
       .from('scans')
       .update({ status: 'parsed', parsed_rows: parsed, parse_error: null })

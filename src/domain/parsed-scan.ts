@@ -56,6 +56,33 @@ export const parsedScanSchema = z.object({
   warnings: z.array(z.string()),
 });
 
+/**
+ * How the parser phrases "this cell has nothing in it": a bare emptiness word,
+ * or the "no <column> given" shape it falls into when naming the column.
+ */
+const EMPTINESS_PATTERN =
+  /\b(empty|blank|unfilled|not filled|left out|omitted|absent|missing|no entry|none given|nothing written)\b|\bno \S+(?: \S+)? (?:given|provided|written|listed|entered|filled)\b/i;
+
+/**
+ * Something the reader still needs to know even though the note also mentions
+ * emptiness, e.g. a cell that is blank BECAUSE it could not be read.
+ */
+const SUBSTANTIVE_PATTERN =
+  /\b(unreadable|illegible|unclear|uncertain|unsure|ambiguous|smudge\w*|blur\w*|glare|obscured|cut off|cut-off|cropped|torn|shadow|harakat|diacritics?|vowel marks?|aligns?|aligned|alignment|merges?|merged|row count|mismatch\w*|overlap\w*)\b/i;
+
+/**
+ * Blank cells are normal on these pages (whole synonym and antonym columns are
+ * often empty), so a note that only reports emptiness is noise, not a warning.
+ */
+export function isEmptyCellWarning(warning: string): boolean {
+  return EMPTINESS_PATTERN.test(warning) && !SUBSTANTIVE_PATTERN.test(warning);
+}
+
+/** Parser notes worth surfacing, with the blank-cell observations dropped. */
+export function visibleWarnings(warnings: readonly string[]): string[] {
+  return warnings.filter((warning) => !isEmptyCellWarning(warning));
+}
+
 export type RowCorrection = z.infer<typeof rowCorrectionSchema>;
 export type ParsedRow = z.infer<typeof parsedRowSchema>;
 export type LessonMarker = z.infer<typeof lessonMarkerSchema>;
