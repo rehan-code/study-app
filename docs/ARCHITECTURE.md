@@ -350,11 +350,25 @@ output with the contract schema, persist `parsed_rows` + status `parsed`, return
 Request `{ cardId: string }`. Load card (404 if missing). Build prompt from the card's
 meaning: a charming minimalist flat vector illustration (one central subject, rounded
 geometric shapes, warm terracotta/amber/sage/cream palette, plain light background,
-generous negative space) with a hard no-text clause (no letters, numbers, labels,
-captions, typography, watermarks). Call fal.ai (`FAL_KEY`; model id from `FAL_MODEL`, default
+generous negative space). Call fal.ai (`FAL_KEY`; model id from `FAL_MODEL`, default
 `fal-ai/flux/schnell`, endpoint `https://fal.run/{model}` with `{ prompt, image_size:
-'square_hd', num_images: 1 }`), download the resulting image, upload to
+'landscape_4_3', num_images: 1 }`), download the resulting image, upload to
 `card-images/${userId}/${cardId}.jpg` with upsert, update `ai_image_path`, return `{ path }`.
+
+**Card images must never contain writing**, and two mechanisms keep them clean:
+
+- _Prompt._ FLUX has no negative prompt, and its text encoder reads "no text, no letters,
+  no captions" as a request for exactly those, so the prompt never names writing at all.
+  It states the wanted result positively instead (smooth empty surfaces, an idea carried by
+  shape and colour alone) and keeps the meaning unquoted so it reads as scene, not caption.
+- _Check and retry._ Each generated image goes to Claude (`ANTHROPIC_API_KEY`; model from
+  `IMAGE_CHECK_MODEL`, default `claude-haiku-4-5-20251001`) with a forced `report_writing_in_image`
+  tool call returning `{ hasWriting, note }`; garbled letter-like squiggles count as writing
+  and ties resolve to "yes". An image with writing is discarded and regenerated, up to three
+  attempts whose prompts step from scene to symbol to bare pictogram (the surfaces that
+  invite lettering vanish as the subject abstracts). All three dirty -> 502, leaving the card
+  imageless rather than storing writing. fal.ai errors propagate at once; only writing retries.
+  A check that cannot run (no key, upstream error) logs and keeps the image.
 
 ## Screen map
 
@@ -417,7 +431,9 @@ in the selection have ever been studied.
 
 - App (.env, gitignored): `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`.
 - Edge functions (supabase secrets, never in the app): `ANTHROPIC_API_KEY`,
-  `ANTHROPIC_MODEL` (optional), `FAL_KEY`, `FAL_MODEL` (optional).
+  `ANTHROPIC_MODEL` (optional), `IMAGE_CHECK_MODEL` (optional), `FAL_KEY`, `FAL_MODEL`
+  (optional). `ANTHROPIC_API_KEY` is used by `parse-scan`, `import-pdf-batch`, and the
+  card-image writing check.
 - Missing app env must never crash the app: the root layout routes to the setup screen.
 
 ## Definition of done

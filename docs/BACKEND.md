@@ -75,12 +75,13 @@ values change. See the header of `scripts/deploy-backend.sh` for details.
 The functions read these at runtime (Dashboard -> Edge Functions -> Secrets,
 or `supabase secrets set`):
 
-| Secret              | Required | Purpose                                       |
-| ------------------- | -------- | --------------------------------------------- |
-| `ANTHROPIC_API_KEY` | yes      | Claude vision parsing in `parse-scan`         |
-| `ANTHROPIC_MODEL`   | no       | override model, default `claude-sonnet-5`     |
-| `FAL_KEY`           | yes      | image generation in `generate-card-image`     |
-| `FAL_MODEL`         | no       | override model, default `fal-ai/flux/schnell` |
+| Secret              | Required | Purpose                                                   |
+| ------------------- | -------- | --------------------------------------------------------- |
+| `ANTHROPIC_API_KEY` | yes      | Claude vision: page parsing, and the card-image check     |
+| `ANTHROPIC_MODEL`   | no       | override parsing model, default `claude-sonnet-5`         |
+| `IMAGE_CHECK_MODEL` | no       | override check model, default `claude-haiku-4-5-20251001` |
+| `FAL_KEY`           | yes      | image generation in `generate-card-image`                 |
+| `FAL_MODEL`         | no       | override model, default `fal-ai/flux/schnell`             |
 
 To set them manually instead of via the deploy script:
 
@@ -174,6 +175,8 @@ at the cursor.
 | `{"error":"The AI key was rejected..."}`            | The Anthropic key is wrong or revoked. Set a fresh key with `supabase secrets set ANTHROPIC_API_KEY=...`.                                                                                                                                                                                                        |
 | Scan stuck on `failed`                              | Open the scan row and read `parse_error`; the scans tab in the app offers retry. Check function logs: Dashboard -> Edge Functions -> parse-scan -> Logs.                                                                                                                                                         |
 | `{"error":"Image generation isn't set up yet..."}`  | `FAL_KEY` secret missing. Set it and retry.                                                                                                                                                                                                                                                                      |
+| `{"error":"Couldn't make a clean image..."}`        | Three generations in a row came back with writing on them, so none was saved. Usually a meaning that is itself about writing ("the letter", "he writes"). Retry, or reword the card's meaning more concretely. Logs show each discarded attempt with what the checker saw.                                       |
+| Card images still show text                         | The writing check could not run, so images went out unverified. Edge Functions -> generate-card-image -> Logs will say `keeping image unchecked` (no `ANTHROPIC_API_KEY`) or `writing check rejected` (bad key, rate limit). Fix the key and regenerate the image from the card screen.                          |
 | Storage 403 / `new row violates row-level security` | The request reached storage without an authenticated user, or the path is outside the caller's own `<userId>/` folder. Make sure the JWT is a signed-in user token (not the anon key) and the migrations in `supabase/migrations/` have been pushed (they create the buckets and the per-user storage policies). |
 | `Scan not found.` / `Card not found.` for a real id | RLS scopes lookups to the signed-in user: the id belongs to a different account, or the row was deleted. Verify you are signed in as the row's owner.                                                                                                                                                            |
 | `supabase db push` fails with auth errors           | Run `supabase login` again or export a valid `SUPABASE_ACCESS_TOKEN`; then re-run the deploy script.                                                                                                                                                                                                             |
@@ -192,6 +195,9 @@ at the cursor.
 - `parse-scan` sends all page photos in one Anthropic Messages request with a
   forced tool call whose JSON schema matches the parsed-scan contract, then
   validates the tool output with the zod mirror before persisting.
-- `generate-card-image` calls fal.ai, downloads the generated image, uploads
-  it to the private `card-images` bucket at `<userId>/<cardId>.jpg` (upsert),
-  and records the path on the card.
+- `generate-card-image` calls fal.ai, downloads the generated image, has Claude
+  check it for writing, uploads it to the private `card-images` bucket at
+  `<userId>/<cardId>.jpg` (upsert), and records the path on the card. An image
+  with any lettering on it is discarded and regenerated (three attempts, each
+  more abstract than the last); if none comes back clean the call fails and the
+  card stays imageless rather than showing writing.

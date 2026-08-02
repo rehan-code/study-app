@@ -6,9 +6,11 @@
 #   1. Links this repo to the Supabase project (SUPABASE_PROJECT_REF).
 #   2. Pushes SQL migrations from supabase/migrations.
 #   3. Sets edge function secrets for whichever of ANTHROPIC_API_KEY,
-#      ANTHROPIC_MODEL, FAL_KEY, FAL_MODEL are present in the environment
-#      (missing ones are skipped, existing secrets are left untouched).
-#   4. Deploys the parse-scan and generate-card-image edge functions.
+#      ANTHROPIC_MODEL, IMAGE_CHECK_MODEL, FAL_KEY, FAL_MODEL are present in
+#      the environment (missing ones are skipped, existing secrets are left
+#      untouched).
+#   4. Deploys the parse-scan, generate-card-image, and import-pdf-batch
+#      edge functions.
 #
 # When to run: after creating the Supabase project, and again whenever
 # migrations, edge functions, or secret values change. Do not run it against
@@ -24,7 +26,7 @@
 # Auth:
 #   Run `supabase login` once, or export SUPABASE_ACCESS_TOKEN.
 # Optional env (each becomes an edge function secret when set):
-#   ANTHROPIC_API_KEY, ANTHROPIC_MODEL, FAL_KEY, FAL_MODEL
+#   ANTHROPIC_API_KEY, ANTHROPIC_MODEL, IMAGE_CHECK_MODEL, FAL_KEY, FAL_MODEL
 #
 set -euo pipefail
 
@@ -51,7 +53,7 @@ supabase db push
 
 secret_args=()
 secret_names=""
-for name in ANTHROPIC_API_KEY ANTHROPIC_MODEL FAL_KEY FAL_MODEL; do
+for name in ANTHROPIC_API_KEY ANTHROPIC_MODEL IMAGE_CHECK_MODEL FAL_KEY FAL_MODEL; do
   value="${!name:-}"
   if [ -n "$value" ]; then
     secret_args+=("${name}=${value}")

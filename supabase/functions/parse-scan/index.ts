@@ -1,6 +1,7 @@
 import { z } from 'npm:zod@4';
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 
+import { toBase64 } from '../_shared/base64.ts';
 import {
   errorResponse,
   fetchWithTimeout,
@@ -60,15 +61,6 @@ function isParseStale(parseStartedAt: string | null): boolean {
 const toolUseBlockSchema = z.object({ type: z.literal('tool_use'), input: z.unknown() });
 
 const anthropicMessageSchema = z.object({ content: z.array(z.unknown()) });
-
-function toBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const chunkSize = 8192;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-  }
-  return btoa(binary);
-}
 
 async function downloadPagesAsBase64(
   supabase: SupabaseClient,
