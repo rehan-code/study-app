@@ -1,3 +1,4 @@
+import { File, UploadType } from 'expo-file-system';
 import { z } from 'zod';
 
 import { cardFromRow, type Card, type CardFields, type ScanKind } from '@/domain/cards';
@@ -350,20 +351,65 @@ export async function saveReviewedCards(
   return { created: rows.length, cardIds };
 }
 
-/** Uploads a picked PDF into the scans bucket under the user's import folder. */
-export async function uploadPdf(localUri: string): Promise<string> {
-  const userId = await requireUserId();
-  const response = await fetch(localUri);
-  if (!response.ok) {
-    throw new Error("Couldn't read that PDF. Please try again.");
+/** A whole book is far too big to size up in a progress-free wait. */
+export type UploadProgress = (fraction: number) => void;
+
+function describeUploadFailure(status: number, body: string, sizeBytes: number): string {
+  if (status === 413 || body.includes('exceeded the maximum allowed size')) {
+    // Only whole-book uploads can get here now, and the free Supabase plan caps
+    // the limit at 50 MB, so pointing at the setting would be a dead end.
+    return `These pages come to ${formatMegabytes(sizeBytes)}, over the upload limit on your Supabase project. Import fewer pages at a time.`;
   }
-  const body = await response.arrayBuffer();
+  if (status === 401 || status === 403) {
+    return 'Your session expired while uploading. Sign in again and retry.';
+  }
+  console.warn(`[queries] pdf upload failed with ${status}:`, body);
+  return "Couldn't upload the PDF. Please try again.";
+}
+
+function formatMegabytes(bytes: number): string {
+  return `${Math.max(1, Math.round(bytes / 1_000_000))} MB`;
+}
+
+/**
+ * Uploads a picked PDF into the scans bucket under the user's import folder.
+ *
+ * The file streams off disk through a signed upload URL. Reading it in JS
+ * first (fetch + arrayBuffer, then a supabase-js body) base64 encodes a book
+ * sized PDF twice to cross the bridge, which no phone survives.
+ */
+export async function uploadPdf(localUri: string, onProgress?: UploadProgress): Promise<string> {
+  const userId = await requireUserId();
+  const file = new File(localUri);
+  if (!file.exists) {
+    throw new Error("Couldn't find that PDF any more. Pick the file again.");
+  }
   const path = `${userId}/imports/${makeStorageSlug()}.pdf`;
-  const { error } = await getSupabase()
-    .storage.from('scans')
-    .upload(path, body, { contentType: 'application/pdf' });
-  if (error !== null) {
+  const { data, error } = await getSupabase().storage.from('scans').createSignedUploadUrl(path);
+  if (error !== null || data === null) {
     raise('upload the PDF', error);
+  }
+  // Native progress fires per chunk; a book would re-render the bar hundreds of
+  // times for the same visible percentage.
+  let reportedPercent = -1;
+  const result = await file.upload(data.signedUrl, {
+    httpMethod: 'PUT',
+    uploadType: UploadType.BINARY_CONTENT,
+    headers: { 'content-type': 'application/pdf', 'cache-control': 'max-age=3600' },
+    onProgress: ({ bytesSent, totalBytes }) => {
+      if (onProgress === undefined || totalBytes <= 0) {
+        return;
+      }
+      const fraction = Math.min(1, bytesSent / totalBytes);
+      const percent = Math.round(fraction * 100);
+      if (percent !== reportedPercent) {
+        reportedPercent = percent;
+        onProgress(fraction);
+      }
+    },
+  });
+  if (result.status >= 400) {
+    throw new Error(describeUploadFailure(result.status, result.body, file.size));
   }
   return path;
 }
@@ -371,6 +417,8 @@ export async function uploadPdf(localUri: string): Promise<string> {
 export async function createPdfImport(
   storagePath: string,
   range: ImportPageRange,
+  totalPages: number | null,
+  pageOffset: number,
 ): Promise<PdfImport> {
   const { data, error } = await getSupabase()
     .from('pdf_imports')
@@ -380,6 +428,12 @@ export async function createPdfImport(
       to_page: range.toPage,
       // The resume cursor starts at the selection, not at the book's first page.
       next_page: range.fromPage,
+      // Counted on the device when the preview opened the book, so progress is
+      // honest from the first batch instead of after it.
+      total_pages: totalPages,
+      // Where this upload sits in the printed book, so the range still reads in
+      // the book's own page numbers even though only a slice was sent.
+      page_offset: pageOffset,
     })
     .select('*')
     .single();
@@ -387,6 +441,28 @@ export async function createPdfImport(
     raise('start the import', error);
   }
   return pdfImportFromRow(data);
+}
+
+/**
+ * Cards an import created that still have no picture. Imported cards are
+ * inserted by the edge function, which never touches fal.ai, so generating
+ * their images is the app's job once the pages are read.
+ */
+export async function listImportedCardIdsWithoutImages(importId: string): Promise<string[]> {
+  const { data, error } = await getSupabase()
+    .from('cards')
+    .select('id')
+    .eq('pdf_import_id', importId)
+    .eq('image_enabled', true)
+    .is('ai_image_path', null);
+  if (error !== null) {
+    raise('find the imported cards', error);
+  }
+  const parsed = insertedCardIdsSchema.safeParse(data);
+  if (!parsed.success) {
+    raise('find the imported cards', { message: 'select returned unexpected rows' });
+  }
+  return parsed.data.map((row) => row.id);
 }
 
 /** The most recent import, done or not; null when none was ever started. */

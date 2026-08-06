@@ -43,7 +43,10 @@
           "photosPermission": "Mufradat needs access to your photos so you can turn pictures of your workbook pages into flashcards.",
           "cameraPermission": "Mufradat uses the camera to photograph your workbook pages and turn them into flashcards."
         }
-      ]
+      ],
+      "expo-image",
+      "expo-status-bar",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,

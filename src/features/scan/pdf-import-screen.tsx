@@ -1,10 +1,10 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import * as DocumentPicker from 'expo-document-picker';
 import { useKeepAwake } from 'expo-keep-awake';
 import { useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { Button } from '@/components/button';
 import { ErrorState } from '@/components/error-state';
@@ -12,21 +12,26 @@ import { LoadingState } from '@/components/loading-state';
 import { ProgressBar } from '@/components/progress-bar';
 import { Screen } from '@/components/screen';
 import { Surface } from '@/components/surface';
-import { TextField } from '@/components/text-field';
 import { Radius, Spacing } from '@/constants/theme';
 import {
+  bookPageRange,
   describeImportProgress,
   describeImportRange,
   describeImportResult,
+  describeReadingNow,
   importProgressFraction,
-  parsePageRange,
+  inFlightBatchFraction,
   type ImportPageRange,
   type PdfImport,
 } from '@/domain/pdf-import';
+import { PdfRangeStep } from '@/features/scan/pdf-range-step';
 import { ScanScreenHeader } from '@/features/scan/scan-screen-header';
 import { usePdfImportRunner } from '@/features/scan/use-pdf-import-runner';
 import { useTheme } from '@/hooks/use-theme';
-import { createPdfImport, uploadPdf } from '@/lib/queries';
+import { existingBookFile, keepBookFile } from '@/lib/book-file';
+import { extractPdfPages, isPdfPreviewAvailable } from '@/lib/pdf-preview';
+import { createPdfImport, listImportedCardIdsWithoutImages, uploadPdf } from '@/lib/queries';
+import { useBookFile } from '@/lib/stores';
 
 function KeepAwakeWhileRunning() {
   useKeepAwake();
@@ -34,22 +39,32 @@ function KeepAwakeWhileRunning() {
 }
 
 interface PickStepProps {
+  busy: boolean;
+  errorMessage: string | null;
   onPicked: (uri: string) => void;
 }
 
-function PickStep({ onPicked }: PickStepProps) {
+function PickStep({ busy, errorMessage, onPicked }: PickStepProps) {
   const theme = useTheme();
+  const [pickError, setPickError] = useState<string | null>(null);
+  const problem = pickError ?? errorMessage;
 
   const pick = async () => {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: 'application/pdf',
-      copyToCacheDirectory: true,
-      multiple: false,
-    });
-    if (result.canceled || result.assets.length === 0) {
-      return;
+    setPickError(null);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'application/pdf',
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (result.canceled || result.assets.length === 0) {
+        return;
+      }
+      onPicked(result.assets[0].uri);
+    } catch (error) {
+      console.warn('[pdf-import] document picker failed:', error);
+      setPickError("Couldn't open the file picker. Please try again.");
     }
-    onPicked(result.assets[0].uri);
   };
 
   return (
@@ -60,108 +75,22 @@ function PickStep({ onPicked }: PickStepProps) {
       <Text style={[styles.title, { color: theme.text }]}>Import from the book</Text>
       <Text style={[styles.message, { color: theme.textSecondary }]}>
         {
-          "Pick the curriculum PDF, choose which pages to read, and Mufradat turns those pages' printed vocabulary tables into cards. Pause and resume whenever you like."
+          "Pick the curriculum PDF, page through it to find the lesson you are on, and Mufradat turns those pages' printed vocabulary tables into cards. Pause and resume whenever you like."
         }
       </Text>
       <Button
-        label="Choose PDF"
+        label={busy ? 'Opening' : 'Choose PDF'}
         icon="doc.badge.plus"
         size="lg"
+        loading={busy}
         onPress={() => {
           void pick();
         }}
       />
+      {problem !== null && (
+        <Text style={[styles.statusText, { color: theme.danger }]}>{problem}</Text>
+      )}
     </View>
-  );
-}
-
-interface RangeStepProps {
-  /** True when the pages come from a book that is already uploaded. */
-  sameBook: boolean;
-  busy: boolean;
-  errorMessage: string | null;
-  onCancel: () => void;
-  onStart: (range: ImportPageRange) => void;
-}
-
-function RangeStep({ sameBook, busy, errorMessage, onCancel, onStart }: RangeStepProps) {
-  const theme = useTheme();
-  const [firstPage, setFirstPage] = useState('');
-  const [lastPage, setLastPage] = useState('');
-  const [rangeError, setRangeError] = useState<string | null>(null);
-
-  const submit = () => {
-    const parsed = parsePageRange(firstPage, lastPage);
-    if (!parsed.ok) {
-      setRangeError(parsed.error);
-      return;
-    }
-    setRangeError(null);
-    onStart(parsed.range);
-  };
-
-  return (
-    <KeyboardAvoidingView
-      style={styles.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <View style={styles.rangeColumn}>
-        <Text style={[styles.title, { color: theme.text }]}>Which pages?</Text>
-        <Text style={[styles.message, { color: theme.textSecondary }]}>
-          {sameBook
-            ? 'Read another stretch of the same PDF, no re-upload needed.'
-            : 'Import just the lesson you are on, or leave both blank for the whole book.'}
-        </Text>
-        <Surface style={styles.rangeCard}>
-          <View style={styles.rangeFields}>
-            <View style={styles.flex}>
-              <TextField
-                label="First page"
-                value={firstPage}
-                onChangeText={(text) => {
-                  setFirstPage(text);
-                  setRangeError(null);
-                }}
-                placeholder="1"
-                keyboardType="number-pad"
-              />
-            </View>
-            <View style={styles.flex}>
-              <TextField
-                label="Last page"
-                value={lastPage}
-                onChangeText={(text) => {
-                  setLastPage(text);
-                  setRangeError(null);
-                }}
-                placeholder="End"
-                keyboardType="number-pad"
-              />
-            </View>
-          </View>
-          <Text style={[styles.statusText, { color: theme.textSecondary }]}>
-            {
-              "Use the PDF's own page numbers, which can differ from the numbers printed on the page. Leave the last page blank to read to the end."
-            }
-          </Text>
-          {rangeError !== null && (
-            <Text style={[styles.statusText, { color: theme.danger }]}>{rangeError}</Text>
-          )}
-          {errorMessage !== null && (
-            <Text style={[styles.statusText, { color: theme.danger }]}>{errorMessage}</Text>
-          )}
-        </Surface>
-        <View style={styles.actions}>
-          <Button
-            label={busy ? 'Starting' : 'Start import'}
-            icon="play.fill"
-            loading={busy}
-            onPress={submit}
-          />
-          <Button label="Cancel" variant="ghost" onPress={onCancel} />
-        </View>
-      </View>
-    </KeyboardAvoidingView>
   );
 }
 
@@ -170,6 +99,10 @@ interface ProgressStepProps {
   running: boolean;
   runError: string | null;
   warnings: string[];
+  /** Line about card pictures being made, or null when none are in flight. */
+  imageStatus: string | null;
+  makingImages: boolean;
+  onMakeImages: () => void;
   onResume: () => void;
   onPause: () => void;
   onImportMorePages: () => void;
@@ -182,6 +115,9 @@ function ProgressStep({
   running,
   runError,
   warnings,
+  imageStatus,
+  makingImages,
+  onMakeImages,
   onResume,
   onPause,
   onImportMorePages,
@@ -193,6 +129,19 @@ function ProgressStep({
   const fraction = importProgressFraction(importRecord);
   const errorText = runError ?? importRecord.lastError;
   const summary = describeImportResult(importRecord.lessonsCreated, importRecord.cardsCreated);
+  // A batch is one Claude call over six pages, so the cursor stands still for
+  // minutes at a time. Naming the pages in flight, and letting the bar ease
+  // across them, is what stops that looking like a stall.
+  const readingNow = running ? describeReadingNow(importRecord) : null;
+  const batchEnd = running ? inFlightBatchFraction(importRecord) : null;
+  // Imports before this screen learned to make pictures, and any card whose
+  // generation failed, both show up here so they can be filled in on demand.
+  const { data: imagelessCardIds } = useQuery({
+    queryKey: ['import-images', importRecord.id],
+    queryFn: () => listImportedCardIdsWithoutImages(importRecord.id),
+    enabled: done && !makingImages,
+  });
+  const imagesToMake = imagelessCardIds?.length ?? 0;
 
   return (
     <View style={styles.progressColumn}>
@@ -203,19 +152,22 @@ function ProgressStep({
             {done ? 'Import finished' : 'Importing the book'}
           </Text>
           <Text style={[styles.statusText, { color: theme.textSecondary }]}>
-            {describeImportRange(importRecord)}
+            {describeImportRange(bookPageRange(importRecord))}
           </Text>
         </View>
-        <ProgressBar progress={done ? 1 : (fraction ?? 0)} />
+        <ProgressBar progress={done ? 1 : (fraction ?? 0)} advancingTo={batchEnd ?? undefined} />
         <Text style={[styles.message, { color: theme.textSecondary }]}>
           {done
             ? `Added ${summary}.`
-            : `${describeImportProgress(importRecord)} · ${summary} so far`}
+            : `${readingNow ?? describeImportProgress(importRecord)} · ${summary} so far`}
         </Text>
         {running && (
           <Text style={[styles.statusText, { color: theme.textSecondary }]}>
-            Keep the app open; the screen stays awake while pages are read.
+            {`${describeImportProgress(importRecord)} done. Keep the app open; the screen stays awake while pages are read.`}
           </Text>
+        )}
+        {imageStatus !== null && (
+          <Text style={[styles.statusText, { color: theme.textSecondary }]}>{imageStatus}</Text>
         )}
         {!running && !done && errorText !== null && (
           <Text style={[styles.statusText, { color: theme.danger }]}>{errorText}</Text>
@@ -229,6 +181,15 @@ function ProgressStep({
       {done ? (
         <View style={styles.actions}>
           <Button label="See your library" icon="books.vertical" onPress={onOpenLibrary} />
+          {(imagesToMake > 0 || makingImages) && (
+            <Button
+              label={makingImages ? 'Making pictures' : `Make ${imagesToMake} card pictures`}
+              icon="photo"
+              variant="secondary"
+              loading={makingImages}
+              onPress={onMakeImages}
+            />
+          )}
           <Button
             label="Import more pages"
             icon="plus"
@@ -255,18 +216,66 @@ function ProgressStep({
  * already in storage when more pages of the same PDF are being imported.
  */
 type PendingBook =
-  { localUri: string; storagePath: null } | { localUri: null; storagePath: string };
+  | { kind: 'picked'; localUri: string }
+  | { kind: 'uploaded'; storagePath: string; localUri: string | null };
 
 export function PdfImportScreen() {
   const router = useRouter();
+  const theme = useTheme();
   const runner = usePdfImportRunner();
+  const bookFile = useBookFile();
   const [pendingBook, setPendingBook] = useState<PendingBook | null>(null);
   const [pickingAnother, setPickingAnother] = useState(false);
+  const [uploadFraction, setUploadFraction] = useState<number | null>(null);
+
+  // Moving the picked file out of the picker's cache is quick but not instant
+  // for a book, so the pick button stays busy until the copy is in place.
+  const pickMutation = useMutation({
+    mutationFn: (pickedUri: string) => keepBookFile(pickedUri),
+    onSuccess: (localUri) => {
+      setPendingBook({ kind: 'picked', localUri });
+    },
+  });
 
   const startMutation = useMutation({
-    mutationFn: async ({ book, range }: { book: PendingBook; range: ImportPageRange }) => {
-      const path = book.storagePath === null ? await uploadPdf(book.localUri) : book.storagePath;
-      return createPdfImport(path, range);
+    mutationFn: async ({
+      book,
+      range,
+      totalPages,
+    }: {
+      book: PendingBook;
+      range: ImportPageRange;
+      totalPages: number | null;
+    }) => {
+      if (book.kind === 'uploaded') {
+        return createPdfImport(book.storagePath, range, totalPages, 0);
+      }
+      // A whole curriculum is far past what storage accepts, and the importer
+      // only reads the chosen lesson, so only those pages are cut out and sent.
+      // The upload then starts at its own page 1, and page_offset is what puts
+      // the book's numbering back on the progress screen.
+      const sliceable = range.toPage !== null && isPdfPreviewAvailable();
+      if (!sliceable) {
+        setUploadFraction(0);
+        const wholePath = await uploadPdf(book.localUri, setUploadFraction);
+        bookFile.rememberBook(wholePath, book.localUri);
+        return createPdfImport(wholePath, range, totalPages, 0);
+      }
+      const lastPage = range.toPage ?? range.fromPage;
+      const slice = await extractPdfPages(book.localUri, range.fromPage, lastPage);
+      setUploadFraction(0);
+      const path = await uploadPdf(slice, setUploadFraction);
+      bookFile.rememberBook(path, book.localUri);
+      const pageCount = lastPage - range.fromPage + 1;
+      return createPdfImport(
+        path,
+        { fromPage: 1, toPage: pageCount },
+        pageCount,
+        range.fromPage - 1,
+      );
+    },
+    onSettled: () => {
+      setUploadFraction(null);
     },
     onSuccess: (created) => {
       setPendingBook(null);
@@ -277,6 +286,7 @@ export function PdfImportScreen() {
   });
 
   const record = runner.importRecord;
+  const uploading = uploadFraction !== null;
 
   let body;
   if (runner.loading) {
@@ -284,27 +294,46 @@ export function PdfImportScreen() {
   } else if (runner.loadError !== null) {
     body = <ErrorState message={runner.loadError} onRetry={runner.reload} />;
   } else if (pendingBook !== null) {
+    const sameBook = pendingBook.kind === 'uploaded';
     body = (
-      <RangeStep
-        sameBook={pendingBook.storagePath !== null}
-        busy={startMutation.isPending}
-        errorMessage={startMutation.isError ? startMutation.error.message : null}
-        onCancel={() => {
-          setPendingBook(null);
-          setPickingAnother(false);
-          startMutation.reset();
-        }}
-        onStart={(range) => {
-          startMutation.mutate({ book: pendingBook, range });
-        }}
-      />
+      <>
+        <PdfRangeStep
+          localUri={pendingBook.localUri}
+          knownTotalPages={sameBook ? (record?.totalPages ?? null) : null}
+          // Importing the next lesson normally carries on from where the last
+          // one stopped, so the browser opens there instead of at page one.
+          startAtPage={sameBook ? (record?.nextPage ?? 1) : 1}
+          sameBook={sameBook}
+          busy={startMutation.isPending}
+          busyLabel={uploading ? 'Uploading' : 'Starting'}
+          errorMessage={startMutation.isError ? startMutation.error.message : null}
+          onCancel={() => {
+            setPendingBook(null);
+            setPickingAnother(false);
+            startMutation.reset();
+          }}
+          onStart={(range, totalPages) => {
+            startMutation.mutate({ book: pendingBook, range, totalPages });
+          }}
+        />
+        {uploading && (
+          <View style={styles.uploadBar}>
+            <ProgressBar progress={uploadFraction} />
+            <Text style={[styles.statusText, { color: theme.textSecondary }]}>
+              {`Uploading the book ${Math.round(uploadFraction * 100)}%`}
+            </Text>
+          </View>
+        )}
+      </>
     );
   } else if (record === null || pickingAnother) {
     body = (
       <PickStep
+        busy={pickMutation.isPending}
+        errorMessage={pickMutation.isError ? pickMutation.error.message : null}
         onPicked={(uri) => {
           startMutation.reset();
-          setPendingBook({ localUri: uri, storagePath: null });
+          pickMutation.mutate(uri);
         }}
       />
     );
@@ -315,13 +344,25 @@ export function PdfImportScreen() {
         running={runner.running}
         runError={runner.runError}
         warnings={runner.lastWarnings}
+        imageStatus={runner.imageStatus}
+        makingImages={runner.makingImages}
+        onMakeImages={() => {
+          runner.makeImages(record.id);
+        }}
         onResume={() => {
           runner.start(record.id);
         }}
         onPause={runner.pause}
         onImportMorePages={() => {
           startMutation.reset();
-          setPendingBook({ localUri: null, storagePath: record.storagePath });
+          setPendingBook({
+            kind: 'uploaded',
+            storagePath: record.storagePath,
+            localUri:
+              bookFile.storagePath === record.storagePath
+                ? existingBookFile(bookFile.localUri)
+                : null,
+          });
         }}
         onImportAnother={() => {
           setPickingAnother(true);
@@ -347,9 +388,6 @@ export function PdfImportScreen() {
 }
 
 const styles = StyleSheet.create({
-  flex: {
-    flex: 1,
-  },
   pickColumn: {
     flex: 1,
     alignItems: 'center',
@@ -383,19 +421,9 @@ const styles = StyleSheet.create({
     fontWeight: 500,
     textAlign: 'center',
   },
-  rangeColumn: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: Spacing.four,
+  uploadBar: {
+    padding: Spacing.three,
     gap: Spacing.two,
-  },
-  rangeCard: {
-    gap: Spacing.three,
-    marginTop: Spacing.one,
-  },
-  rangeFields: {
-    flexDirection: 'row',
-    gap: Spacing.three,
   },
   progressColumn: {
     flex: 1,

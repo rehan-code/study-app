@@ -11,6 +11,10 @@ import { NO_LESSON_ID } from '@/lib/queries';
 
 // Hoisted above the imports by vitest; replaces the React Native only modules.
 vi.mock('react-native-url-polyfill/auto', () => ({}));
+vi.mock('expo-file-system', () => ({
+  File: class {},
+  UploadType: { BINARY_CONTENT: 0, MULTIPART: 1 },
+}));
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
     getItem: async () => null,

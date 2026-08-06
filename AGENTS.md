@@ -20,6 +20,7 @@ Read the exact versioned docs at https://docs.expo.dev/versions/v57.0.0/ before 
 - `src/components/`: shared design-system primitives
 - `src/domain/`: pure TS business logic, no React/supabase imports, vitest-tested
 - `src/lib/`: supabase client, auth, queries, edge-function API, persisted stores
+- `modules/`: local Expo native modules, imported only from `src/lib`
 - `supabase/`: migrations + Deno edge functions (excluded from app tsconfig/eslint)
 
 ## Rules

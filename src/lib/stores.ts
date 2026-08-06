@@ -70,6 +70,47 @@ export const useStudyFilter = create<StudyFilterState>()(
   ),
 );
 
+interface BookFileState {
+  /** Storage path of the uploaded book the kept file belongs to. */
+  storagePath: string | null;
+  localUri: string | null;
+  rememberBook: (storagePath: string, localUri: string) => void;
+}
+
+const persistedBookFileSchema = z.object({
+  storagePath: z.string().nullable(),
+  localUri: z.string().nullable(),
+});
+
+/**
+ * Where the device's copy of the uploaded book lives, so importing the next
+ * lesson can show its pages without downloading the PDF again. Only the newest
+ * book is tracked, matching what `keepBookFile` leaves on disk.
+ */
+export const useBookFile = create<BookFileState>()(
+  persist(
+    (set) => ({
+      storagePath: null,
+      localUri: null,
+      rememberBook: (storagePath, localUri) => {
+        set({ storagePath, localUri });
+      },
+    }),
+    {
+      name: 'mufradat-book-file',
+      storage: createJSONStorage(() => AsyncStorage),
+      partialize: (state) => ({ storagePath: state.storagePath, localUri: state.localUri }),
+      merge: (persistedState, currentState) => {
+        const parsed = persistedBookFileSchema.safeParse(persistedState);
+        if (!parsed.success) {
+          return currentState;
+        }
+        return { ...currentState, ...parsed.data };
+      },
+    },
+  ),
+);
+
 interface SettingsState {
   aiImagesEnabled: boolean;
   newCardsPerSession: number;

@@ -21,6 +21,10 @@ export interface TextFieldProps {
   keyboardType?: KeyboardTypeOptions;
   secureTextEntry?: boolean;
   autoCapitalize?: TextInputProps['autoCapitalize'];
+  onBlur?: () => void;
+  textAlign?: TextInputProps['textAlign'];
+  /** Pairs with an `<InputAccessoryView>`; number pads have no return key. */
+  inputAccessoryViewID?: string;
 }
 
 export function TextField({
@@ -34,6 +38,9 @@ export function TextField({
   keyboardType,
   secureTextEntry,
   autoCapitalize,
+  onBlur,
+  textAlign,
+  inputAccessoryViewID,
 }: TextFieldProps) {
   const theme = useTheme();
 
@@ -51,6 +58,9 @@ export function TextField({
         keyboardType={keyboardType}
         secureTextEntry={secureTextEntry}
         autoCapitalize={autoCapitalize}
+        onBlur={onBlur}
+        textAlign={textAlign}
+        inputAccessoryViewID={inputAccessoryViewID}
         autoCorrect={!rtl && !secureTextEntry}
         style={[
           styles.input,

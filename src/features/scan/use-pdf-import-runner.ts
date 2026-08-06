@@ -3,8 +3,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { visibleWarnings } from '@/domain/parsed-scan';
 import type { ImportBatchResult, PdfImport } from '@/domain/pdf-import';
-import { importPdfBatch } from '@/lib/api';
-import { getLatestPdfImport, queryKeys } from '@/lib/queries';
+import { generateImagesForCards } from '@/features/scan/generate-card-images';
+import { generateCardImage, importPdfBatch } from '@/lib/api';
+import { getLatestPdfImport, listImportedCardIdsWithoutImages, queryKeys } from '@/lib/queries';
+import { useSettings } from '@/lib/stores';
 
 export interface PdfImportRunner {
   /** Latest known import, live-updated while batches run. */
@@ -14,6 +16,11 @@ export interface PdfImportRunner {
   running: boolean;
   runError: string | null;
   lastWarnings: string[];
+  /** Line about card pictures being made, or null when none are in flight. */
+  imageStatus: string | null;
+  makingImages: boolean;
+  /** Fills in pictures for cards an import left without one. */
+  makeImages: (importId: string) => void;
   start: (importId: string) => void;
   pause: () => void;
   reload: () => void;
@@ -41,8 +48,12 @@ export function usePdfImportRunner(): PdfImportRunner {
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [lastWarnings, setLastWarnings] = useState<string[]>([]);
+  const [imageStatus, setImageStatus] = useState<string | null>(null);
+  const [makingImages, setMakingImages] = useState(false);
   const activeImportIdRef = useRef<string | null>(null);
   const loopingRef = useRef(false);
+  // Guards the button and the automatic run from overlapping on the same cards.
+  const makingImagesRef = useRef(false);
 
   const latestQuery = useQuery({
     queryKey: queryKeys.pdfImports,
@@ -69,6 +80,58 @@ export function usePdfImportRunner(): PdfImportRunner {
     [queryClient],
   );
 
+  /**
+   * Imported cards arrive straight from the edge function, which never calls
+   * fal.ai, so nothing has a picture until this runs. Best effort: a card that
+   * fails just stays imageless and can be generated from the card screen.
+   */
+  const makeCardImages = useCallback(
+    async (importId: string) => {
+      if (!useSettings.getState().aiImagesEnabled || makingImagesRef.current) {
+        return;
+      }
+      let cardIds: string[];
+      try {
+        cardIds = await listImportedCardIdsWithoutImages(importId);
+      } catch (error) {
+        console.warn('[pdf-import] could not list cards for images:', error);
+        return;
+      }
+      if (cardIds.length === 0) {
+        return;
+      }
+      makingImagesRef.current = true;
+      setMakingImages(true);
+      let made = 0;
+      setImageStatus(`Making card pictures, 0 of ${cardIds.length}`);
+      const result = await generateImagesForCards(cardIds, {
+        generate: generateCardImage,
+        onImageReady: (cardId) => {
+          made += 1;
+          setImageStatus(`Making card pictures, ${made} of ${cardIds.length}`);
+          void queryClient.invalidateQueries({ queryKey: queryKeys.cards([]) });
+          void queryClient.invalidateQueries({ queryKey: queryKeys.card(cardId) });
+        },
+      });
+      makingImagesRef.current = false;
+      setMakingImages(false);
+      setImageStatus(
+        result.failed === 0
+          ? `Added ${result.succeeded} card pictures.`
+          : `Added ${result.succeeded} card pictures; ${result.failed} could not be made.`,
+      );
+      void queryClient.invalidateQueries({ queryKey: ['import-images', importId] });
+    },
+    [queryClient],
+  );
+
+  const makeImages = useCallback(
+    (importId: string) => {
+      void makeCardImages(importId);
+    },
+    [makeCardImages],
+  );
+
   const runLoop = useCallback(
     async (importId: string) => {
       while (loopingRef.current && activeImportIdRef.current === importId) {
@@ -91,11 +154,14 @@ export function usePdfImportRunner(): PdfImportRunner {
         if (result.status === 'done') {
           setRunning(false);
           loopingRef.current = false;
+          // Pictures keep arriving after the pages are read; the screen stays
+          // usable and the library fills in behind it.
+          void makeCardImages(importId);
           return;
         }
       }
     },
-    [applyResult, queryClient],
+    [applyResult, makeCardImages, queryClient],
   );
 
   const start = useCallback(
@@ -107,6 +173,7 @@ export function usePdfImportRunner(): PdfImportRunner {
       loopingRef.current = true;
       setRunning(true);
       setRunError(null);
+      setImageStatus(null);
       void runLoop(importId);
     },
     [runLoop],
@@ -128,6 +195,9 @@ export function usePdfImportRunner(): PdfImportRunner {
     running,
     runError,
     lastWarnings,
+    imageStatus,
+    makingImages,
+    makeImages,
     start,
     pause,
     reload,

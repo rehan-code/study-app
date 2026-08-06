@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  bookPageRange,
+  clampPage,
   describeImportProgress,
   describeImportRange,
   describeImportResult,
+  describePageSelection,
+  describeReadingNow,
   importBatchResultSchema,
   importLastPage,
   importProgressFraction,
+  inFlightBatch,
+  inFlightBatchFraction,
   parsePageRange,
   pdfImportFromRow,
 } from '@/domain/pdf-import';
@@ -36,6 +42,7 @@ describe('pdfImportFromRow', () => {
       nextPage: 121,
       fromPage: 1,
       toPage: null,
+      pageOffset: 0,
       lessonsCreated: 12,
       cardsCreated: 340,
       lastError: null,
@@ -61,6 +68,51 @@ describe('pdfImportFromRow', () => {
 
   it('rejects a page range below page one', () => {
     expect(() => pdfImportFromRow({ ...row, from_page: 0 })).toThrow();
+  });
+
+  it('defaults the page offset for rows written before slicing existed', () => {
+    expect(pdfImportFromRow(row).pageOffset).toBe(0);
+  });
+
+  it('reads the offset of a slice cut out of a book', () => {
+    const slice = pdfImportFromRow({
+      ...row,
+      from_page: 1,
+      to_page: 20,
+      next_page: 7,
+      page_offset: 120,
+    });
+    expect(slice.pageOffset).toBe(120);
+  });
+});
+
+describe('bookPageRange', () => {
+  it('leaves a whole-book upload alone', () => {
+    expect(bookPageRange({ fromPage: 1, toPage: 20, pageOffset: 0 })).toEqual({
+      fromPage: 1,
+      toPage: 20,
+    });
+  });
+
+  it('shifts a slice back to the book its pages came from', () => {
+    expect(bookPageRange({ fromPage: 1, toPage: 20, pageOffset: 120 })).toEqual({
+      fromPage: 121,
+      toPage: 140,
+    });
+  });
+
+  it('keeps an open-ended range open', () => {
+    expect(bookPageRange({ fromPage: 1, toPage: null, pageOffset: 120 })).toEqual({
+      fromPage: 121,
+      toPage: null,
+    });
+  });
+
+  it('reads back as the pages the browser selected', () => {
+    const selected = { fromPage: 121, toPage: 140 };
+    const pageCount = selected.toPage - selected.fromPage + 1;
+    const stored = { fromPage: 1, toPage: pageCount, pageOffset: selected.fromPage - 1 };
+    expect(describeImportRange(bookPageRange(stored))).toBe('Pages 121 to 140');
   });
 });
 
@@ -181,6 +233,70 @@ describe('describeImportProgress', () => {
   });
 });
 
+describe('inFlightBatch', () => {
+  it('covers a whole batch when the selection is long enough', () => {
+    expect(inFlightBatch({ totalPages: 856, fromPage: 1, toPage: null, nextPage: 1 })).toEqual({
+      fromPage: 1,
+      toPage: 6,
+    });
+  });
+
+  it('stops at the end of a short selection', () => {
+    expect(inFlightBatch({ totalPages: 7, fromPage: 1, toPage: 7, nextPage: 1 })).toEqual({
+      fromPage: 1,
+      toPage: 6,
+    });
+    expect(inFlightBatch({ totalPages: 7, fromPage: 1, toPage: 7, nextPage: 7 })).toEqual({
+      fromPage: 7,
+      toPage: 7,
+    });
+  });
+
+  it('is null once the cursor is past the selection', () => {
+    expect(inFlightBatch({ totalPages: 7, fromPage: 1, toPage: 7, nextPage: 8 })).toBeNull();
+  });
+
+  it('is null before the selection end is known', () => {
+    expect(inFlightBatch({ totalPages: null, fromPage: 1, toPage: null, nextPage: 1 })).toBeNull();
+  });
+});
+
+describe('inFlightBatchFraction', () => {
+  it('is where the bar lands when the running batch reports', () => {
+    // The 0/7 stall the user sees is this whole span in one Claude call.
+    expect(inFlightBatchFraction({ totalPages: 7, fromPage: 1, toPage: 7, nextPage: 1 })).toBe(
+      6 / 7,
+    );
+    expect(inFlightBatchFraction({ totalPages: 7, fromPage: 1, toPage: 7, nextPage: 7 })).toBe(1);
+  });
+
+  it('is null when nothing is in flight', () => {
+    expect(
+      inFlightBatchFraction({ totalPages: 7, fromPage: 1, toPage: 7, nextPage: 8 }),
+    ).toBeNull();
+  });
+});
+
+describe('describeReadingNow', () => {
+  it('names the pages of a slice in the book they came from', () => {
+    expect(
+      describeReadingNow({ totalPages: 7, fromPage: 1, toPage: 7, nextPage: 1, pageOffset: 139 }),
+    ).toBe('Reading pages 140 to 145');
+  });
+
+  it('drops to a single page at the tail of a selection', () => {
+    expect(
+      describeReadingNow({ totalPages: 7, fromPage: 1, toPage: 7, nextPage: 7, pageOffset: 139 }),
+    ).toBe('Reading page 146');
+  });
+
+  it('is null once every page is read', () => {
+    expect(
+      describeReadingNow({ totalPages: 7, fromPage: 1, toPage: 7, nextPage: 8, pageOffset: 139 }),
+    ).toBeNull();
+  });
+});
+
 describe('describeImportRange', () => {
   it('names the whole book', () => {
     expect(describeImportRange({ fromPage: 1, toPage: null })).toBe('Whole book');
@@ -232,6 +348,53 @@ describe('parsePageRange', () => {
       ok: false,
       error: 'The last page must come on or after the first page.',
     });
+  });
+
+  it('accepts a range that fits the known book', () => {
+    expect(parsePageRange('121', '140', 856)).toEqual({
+      ok: true,
+      range: { fromPage: 121, toPage: 140 },
+    });
+    expect(parsePageRange('', '', 856)).toEqual({ ok: true, range: { fromPage: 1, toPage: null } });
+    expect(parsePageRange('856', '856', 856)).toEqual({
+      ok: true,
+      range: { fromPage: 856, toPage: 856 },
+    });
+  });
+
+  it('rejects pages past the end of a known book', () => {
+    expect(parsePageRange('900', '', 856)).toEqual({
+      ok: false,
+      error: 'This book has 856 pages, so page 900 is past it.',
+    });
+    expect(parsePageRange('121', '900', 856)).toEqual({
+      ok: false,
+      error: 'This book has 856 pages, so page 900 is past it.',
+    });
+  });
+});
+
+describe('clampPage', () => {
+  it('keeps a page inside the book', () => {
+    expect(clampPage(0, 856)).toBe(1);
+    expect(clampPage(900, 856)).toBe(856);
+    expect(clampPage(121, 856)).toBe(121);
+  });
+
+  it('rounds and survives junk input', () => {
+    expect(clampPage(12.6, 856)).toBe(13);
+    expect(clampPage(Number.NaN, 856)).toBe(1);
+  });
+
+  it('never returns page zero for an empty book', () => {
+    expect(clampPage(1, 0)).toBe(1);
+  });
+});
+
+describe('describePageSelection', () => {
+  it('counts the selected pages', () => {
+    expect(describePageSelection(121, 140)).toBe('Pages 121 to 140 · 20 pages');
+    expect(describePageSelection(121, 121)).toBe('Page 121 only · 1 page');
   });
 });
 

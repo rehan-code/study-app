@@ -17,6 +17,9 @@ supabase/migrations/0001_init.sql (data model).
   (time and randomness are injected). Exhaustively unit tested.
 - `src/lib/`: side-effectful integrations (supabase client, auth, queries, edge-function
   API, persisted zustand stores).
+- `modules/`: local Expo native modules, autolinked from the repo root. Only `src/lib`
+  imports them, so the rest of the app depends on a lib contract and not on a native
+  module that may be missing on a platform.
 - `supabase/`: SQL migrations and Deno edge functions. Excluded from the app's tsconfig and
   eslint; keep them self-contained.
 
@@ -42,17 +45,24 @@ supabase/migrations/0001_init.sql (data model).
 - `lessons(id, user_id, name unique per user, position, created_at)`
 - `scans(id, user_id, kind nouns|verbs|phrases, page_paths text[], status uploaded|parsing|parsed|reviewed|failed, parsed_rows jsonb, parse_error, created_at)`
 - `cards(id, user_id, lesson_id?, scan_id?, pdf_import_id?, import_page?, type vocab|verb|phrase, fields jsonb, meaning, ai_image_path?, image_enabled, box, due_at, correct_count, incorrect_count, last_reviewed_at?, created_at)`
-- `pdf_imports(id, user_id, storage_path, status created|processing|done|failed, total_pages?, next_page, from_page, to_page?, current_lesson?, lessons_created, cards_created, last_error?, created_at, updated_at)`:
-  book imports; `from_page`/`to_page` are the selected page range (`to_page` null runs to the
-  last page, `from_page` 1 with `to_page` null is the whole book) and seed `next_page`, the
-  resume cursor. `(pdf_import_id, import_page)` on cards lets a re-run of a batch replace its
-  own cards instead of duplicating them. Importing another range of the same book reuses the
-  uploaded `storage_path` in a new row.
-- Storage buckets (private): `scans` (page photos and uploaded book PDFs), `card-images`
+- `pdf_imports(id, user_id, storage_path, status created|processing|done|failed, total_pages?, next_page, from_page, to_page?, page_offset, current_lesson?, lessons_created, cards_created, last_error?, created_at, updated_at)`:
+  book imports. Every page number here is in the UPLOADED file's numbering, not the printed
+  book's: only the selected pages are uploaded (see below), so a slice runs `from_page` 1 to
+  `to_page` N and `page_offset` is the book page its page 1 came from, minus 1. `bookPageRange`
+  converts back for anything a person reads; `page_offset` 0 means the upload is the whole
+  book, which is what pre-slicing rows and the legacy whole-book path store. `from_page`/
+  `to_page` seed `next_page`, the resume cursor (`to_page` null runs to the last page).
+  `(pdf_import_id, import_page)` on cards lets a re-run of a batch replace its own cards
+  instead of duplicating them.
+- Storage buckets (private): `scans` (page photos and uploaded book slices), `card-images`
   (generated study images).
 - Storage path conventions: scans `${userId}/${slug}.jpg` where slug is from
   `makeStorageSlug()`; book PDFs `${userId}/imports/${slug}.pdf`; card images
   `${userId}/${cardId}.jpg` (upsert on regenerate).
+- Whole curriculum PDFs are NOT uploaded. They run to tens of megabytes, past the Supabase
+  storage upload limit (50 MB, and the free plan caps the setting there), and the importer
+  only ever reads the selected lesson. The app cuts those pages out on the device with
+  `extractPdfPages` and uploads the slice, so the upload is small whatever the book weighs.
 
 ## Domain contracts
 
@@ -242,6 +252,7 @@ export const queryKeys = {
   scans: ['scans'] as const,
   scan: (id: string) => ['scans', 'byId', id] as const,
   signedUrl: (bucket: string, path: string) => ['signed-url', bucket, path] as const,
+  pdfImports: ['pdf-imports'] as const,
 };
 export const NO_LESSON_ID = 'no-lesson'; // virtual filter id for cards without a lesson
 
@@ -266,6 +277,15 @@ export async function getScan(id: string): Promise<Scan>;
 export async function createScan(kind: ScanKind, pagePaths: string[]): Promise<Scan>;
 export async function deleteScan(id: string): Promise<void>;
 export async function uploadScanPage(localUri: string): Promise<string>; // returns storage path
+export async function uploadPdf(localUri: string, onProgress?: UploadProgress): Promise<string>;
+export async function createPdfImport(
+  storagePath: string,
+  range: ImportPageRange,
+  totalPages: number | null,
+  pageOffset: number,
+): Promise<PdfImport>;
+export async function getLatestPdfImport(): Promise<PdfImport | null>;
+export async function listImportedCardIdsWithoutImages(importId: string): Promise<string[]>;
 export async function getSignedUrl(bucket: 'scans' | 'card-images', path: string): Promise<string>;
 export interface SaveReviewInput {
   scan: Scan;
@@ -280,6 +300,15 @@ export async function saveReviewedCards(
 lesson names to ids creating lessons as needed (case-insensitive name match against existing),
 insert cards (type, fields with note folded in, meaning, lesson_id, scan_id), mark the scan
 `reviewed`, return the inserted card ids. After a successful save the review editor kicks off
+`uploadPdf` streams the file off disk to a signed upload URL with
+`expo-file-system`'s native upload task, reporting progress. It must NEVER read the PDF
+into JS first: `fetch(uri).arrayBuffer()` base64 encodes a book sized file to cross the
+bridge, and then supabase-js encodes it again to send it, which is why book imports used
+to fail before a single page was ever parsed. A 413 is reported as the project's storage
+upload limit, not as a generic failure. `createPdfImport` records the page count the
+preview measured on device, so progress is honest from the first batch.
+
+`saveReviewedCards` also kicks off
 best-effort background image generation for those ids (`generateImagesForCards` in
 `src/features/scan/generate-card-images.ts`: small concurrency pool, failures swallowed,
 card queries invalidated per finished image), skipped when `aiImagesEnabled` is off. `uploadScanPage`: read the local file (base64 via expo FileSystem or
@@ -296,15 +325,50 @@ Use `getSupabase().functions.invoke(name, { body })`. Non-2xx or `{ error }` pay
 an `Error` whose message is safe to show the user. Validate success payloads with zod
 (`parsedScanSchema` for parse-scan).
 
+### src/lib/pdf-preview.ts
+
+```ts
+export function isPdfPreviewAvailable(): boolean;
+export async function getPdfPageCount(localUri: string): Promise<number>;
+export async function renderPdfPage(localUri: string, page: number, width: number): Promise<string>;
+export async function extractPdfPages(
+  localUri: string,
+  fromPage: number,
+  toPage: number,
+): Promise<string>;
+```
+
+The only importer of `modules/pdf-preview`, a local Expo module that draws a page of a
+local PDF with PDFKit and returns a cached JPEG URI. Declared apple-only, so
+`requireOptionalNativeModule` yields null elsewhere and `isPdfPreviewAvailable()` is false;
+callers fall back to typed page numbers rather than breaking. The native side caches by
+(file, page, width) so paging back and forth over a spread redraws nothing.
+
+### src/lib/book-file.ts
+
+```ts
+export async function keepBookFile(pickedUri: string): Promise<string>;
+export function existingBookFile(localUri: string | null): string | null;
+```
+
+The picked PDF is moved out of the document picker's cache copy into
+`Paths.document/books/`, because iOS reclaims the cache directory and a curriculum PDF is
+a fat early candidate. Only the newest book is kept; picking another drops the previous
+one. `existingBookFile` is how a caller checks the kept copy is still there before showing
+a preview of it.
+
 ### src/lib/stores.ts (zustand + AsyncStorage persistence)
 
 ```ts
 export const useStudyFilter: /* { selectedLessonIds: string[]; toggleLesson(id): void; selectAll(): void; isAll: boolean } */
 export const useSettings: /* { aiImagesEnabled: boolean; newCardsPerSession: number; setAiImagesEnabled(v): void; setNewCardsPerSession(n): void } */
+export const useBookFile: /* { storagePath: string | null; localUri: string | null; rememberBook(storagePath, localUri): void } */
 ```
 
 Empty `selectedLessonIds` means "all lessons" (the default). `NO_LESSON_ID` may appear in the
-selection. Defaults: aiImagesEnabled true, newCardsPerSession 20.
+selection. Defaults: aiImagesEnabled true, newCardsPerSession 20. `useBookFile` pairs the
+uploaded book's storage path with the device copy `keepBookFile` left behind, so importing
+the next lesson can page through the book without downloading the PDF again.
 
 ### src/lib/query-client.ts (owned by the shell)
 
@@ -385,7 +449,7 @@ generous negative space). Call fal.ai (`FAL_KEY`; model id from `FAL_MODEL`, def
 | `src/app/quiz/index.tsx`       | Quiz setup: question count (5/10/20), kind toggles (present on by default), start. Shows eligible-question availability.                                                                                                                               |
 | `src/app/quiz/session.tsx`     | Quiz runner + results.                                                                                                                                                                                                                                 |
 | `src/app/scan/new.tsx`         | Kind picker (three friendly cards explaining each layout), pick/take up to 8 photos grouped into right-page-then-left-page spreads (phrases: one page per group), per-spread swap, crop/remove, upload + parse with progress, then navigate to review. |
-| `src/app/scan/import-pdf.tsx`  | Book import: pick the curriculum PDF, choose a page range (blank = whole book), then drive `import-pdf-batch` one batch at a time with progress, pause/resume, and a resumable cursor. More pages reuse the upload.                                    |
+| `src/app/scan/import-pdf.tsx`  | Book import: pick the curriculum PDF, page through the real pages to mark where the lesson starts and ends, upload with progress, then drive `import-pdf-batch` one batch at a time, pause/resume, resumable cursor. More pages reuse the upload.      |
 | `src/app/scan/[id]/review.tsx` | Review parsed rows: editable fields per FIELD_LABELS, meaning, per-row lesson assignment seeded from markers, bulk lesson set, exclude row, validation, save all, then background image generation for the new cards.                                  |
 | `src/app/lesson/[id].tsx`      | Cards in a lesson; rename/delete lesson.                                                                                                                                                                                                               |
 | `src/app/card/[id].tsx`        | Card detail: edit fields + meaning, image section (preview, generate/regenerate, per-card toggle), SRS stats, reset progress, change lesson, delete.                                                                                                   |
@@ -416,6 +480,39 @@ flashcard session. The runner holds its own copy of the cards and applies each a
 so "Try again" reflects the levels this quiz just changed; the cards query is invalidated on
 exit. Setup blocks with a "study first" message while fewer than `MIN_QUIZ_QUESTIONS` cards
 in the selection have ever been studied.
+
+### Book import UX (src/features/scan)
+
+Picking a PDF moves it to permanent storage (`keepBookFile`) and opens `PdfRangeStep`.
+With the native renderer present it shows `PageBrowser`: the drawn page filling most of
+the screen, a `‹ [page] of N ›` pager whose number is also typeable so a lesson deep in an
+800 page book is one entry away, and "Start here" / "End here" buttons that mark the
+current page as an end of the range. Marking an end past the other end drags that one
+along, so the selection can never invert. The browser opens on the previous import's
+`nextPage` when the book is already uploaded, which is where the next lesson begins.
+
+The jump field uses a number pad, which on iOS has no return key, so it carries an
+`InputAccessoryView` with Done and the page image dismisses the keyboard on tap. Nothing is
+uploaded until the range is confirmed, so a wrong guess costs no bandwidth and no AI parse.
+`PageNumbersForm` (two typed page numbers, validated against the page count when it is
+known) is the fallback when the renderer is missing or the device copy of the book has gone;
+it cannot slice, so that path uploads the whole file and may hit the storage limit.
+
+Confirming the range cuts those pages out (`extractPdfPages`), uploads the slice, and
+records `page_offset` so the progress screen still speaks in the book's page numbers.
+
+`ProgressStep` reports at batch granularity because that is the truth: one batch is a single
+Claude call over `IMPORT_BATCH_PAGES` (6) pages, so the cursor does not move for minutes.
+Rather than let that read as a stall, the screen names the pages in flight
+(`describeReadingNow`, "Reading pages 140 to 145") and `ProgressBar`'s `advancingTo` eases
+the fill across them, stopping at 90% of the batch's span so it never claims work that has
+not landed, then snapping when the batch reports.
+
+Imported cards come straight from the edge function, which only talks to Anthropic, so
+nothing has a picture when the pages are read. The runner calls `generateImagesForCards`
+itself once an import reaches `done` (gated on `aiImagesEnabled`), and the finished screen
+offers a "Make N card pictures" button driven by `listImportedCardIdsWithoutImages`, which
+covers imports made before this existed and any card whose generation failed.
 
 ## Testing
 

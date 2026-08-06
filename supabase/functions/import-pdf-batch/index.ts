@@ -24,6 +24,9 @@ const ANTHROPIC_TIMEOUT_MS = 180_000;
  * Pages per Claude call. Six covers roughly one lesson (text, nouns spread,
  * synonyms page, verbs page, expressions page) while keeping the forced tool
  * output comfortably under MAX_OUTPUT_TOKENS.
+ *
+ * Mirrored as IMPORT_BATCH_PAGES in src/domain/pdf-import.ts, which the app
+ * uses to name the pages being read while a batch is in flight. Keep in sync.
  */
 const BATCH_PAGES = 6;
 
