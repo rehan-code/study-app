@@ -286,6 +286,7 @@ export async function createPdfImport(
 ): Promise<PdfImport>;
 export async function getLatestPdfImport(): Promise<PdfImport | null>;
 export async function listImportedCardIdsWithoutImages(importId: string): Promise<string[]>;
+export async function listCardIdsWithoutImages(): Promise<string[]>; // any source
 export async function getSignedUrl(bucket: 'scans' | 'card-images', path: string): Promise<string>;
 export interface SaveReviewInput {
   scan: Scan;
@@ -444,7 +445,7 @@ generous negative space). Call fal.ai (`FAL_KEY`; model id from `FAL_MODEL`, def
 | `src/app/(tabs)/index.tsx`     | Home: greeting, due/new counts for the current filter, lesson filter chips (all lessons + NO_LESSON_ID), Start studying button, Quiz button, empty states pointing to the Scan tab.                                                                    |
 | `src/app/(tabs)/library.tsx`   | Lessons with card counts (plus a "No lesson" group), tap into lesson detail.                                                                                                                                                                           |
 | `src/app/(tabs)/scans.tsx`     | Scan history list (kind, pages, status badge, date) + New scan button. Tap: parsed -> review, failed -> error + retry parse, reviewed -> summary, uploaded/parsing -> progress.                                                                        |
-| `src/app/(tabs)/settings.tsx`  | Account (email, sign out), AI images toggle, new-cards-per-session stepper, app version.                                                                                                                                                               |
+| `src/app/(tabs)/settings.tsx`  | Account (email, sign out), AI images toggle, missing-pictures count with a "Make them" action (`useMissingCardImages`), new-cards-per-session stepper, app version.                                                                                    |
 | `src/app/study/session.tsx`    | Flashcard session for the current filter (modal, full screen).                                                                                                                                                                                         |
 | `src/app/quiz/index.tsx`       | Quiz setup: question count (5/10/20), kind toggles (present on by default), start. Shows eligible-question availability.                                                                                                                               |
 | `src/app/quiz/session.tsx`     | Quiz runner + results.                                                                                                                                                                                                                                 |
@@ -510,9 +511,11 @@ not landed, then snapping when the batch reports.
 
 Imported cards come straight from the edge function, which only talks to Anthropic, so
 nothing has a picture when the pages are read. The runner calls `generateImagesForCards`
-itself once an import reaches `done` (gated on `aiImagesEnabled`), and the finished screen
-offers a "Make N card pictures" button driven by `listImportedCardIdsWithoutImages`, which
-covers imports made before this existed and any card whose generation failed.
+itself the moment an import reaches `done` (gated on `aiImagesEnabled`) and reports it on
+the `imageStatus` line. There is deliberately NO button for this on the import screen: a
+finished import makes its own pictures, and offering a button reads as though it will not.
+Settings owns the catch-up case instead (`useMissingCardImages`), covering cards from any
+source that still have none, including scans whose generation failed.
 
 ## Testing
 

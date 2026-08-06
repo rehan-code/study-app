@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { visibleWarnings } from '@/domain/parsed-scan';
 import type { ImportBatchResult, PdfImport } from '@/domain/pdf-import';
 import { generateImagesForCards } from '@/features/scan/generate-card-images';
+import { missingImagesKey } from '@/features/settings/use-missing-card-images';
 import { generateCardImage, importPdfBatch } from '@/lib/api';
 import { getLatestPdfImport, listImportedCardIdsWithoutImages, queryKeys } from '@/lib/queries';
 import { useSettings } from '@/lib/stores';
@@ -18,9 +19,6 @@ export interface PdfImportRunner {
   lastWarnings: string[];
   /** Line about card pictures being made, or null when none are in flight. */
   imageStatus: string | null;
-  makingImages: boolean;
-  /** Fills in pictures for cards an import left without one. */
-  makeImages: (importId: string) => void;
   start: (importId: string) => void;
   pause: () => void;
   reload: () => void;
@@ -49,10 +47,10 @@ export function usePdfImportRunner(): PdfImportRunner {
   const [runError, setRunError] = useState<string | null>(null);
   const [lastWarnings, setLastWarnings] = useState<string[]>([]);
   const [imageStatus, setImageStatus] = useState<string | null>(null);
-  const [makingImages, setMakingImages] = useState(false);
   const activeImportIdRef = useRef<string | null>(null);
   const loopingRef = useRef(false);
-  // Guards the button and the automatic run from overlapping on the same cards.
+  // A resume that finishes a second time must not restart pictures already
+  // being made for the same import.
   const makingImagesRef = useRef(false);
 
   const latestQuery = useQuery({
@@ -101,7 +99,6 @@ export function usePdfImportRunner(): PdfImportRunner {
         return;
       }
       makingImagesRef.current = true;
-      setMakingImages(true);
       let made = 0;
       setImageStatus(`Making card pictures, 0 of ${cardIds.length}`);
       const result = await generateImagesForCards(cardIds, {
@@ -114,22 +111,15 @@ export function usePdfImportRunner(): PdfImportRunner {
         },
       });
       makingImagesRef.current = false;
-      setMakingImages(false);
       setImageStatus(
         result.failed === 0
           ? `Added ${result.succeeded} card pictures.`
           : `Added ${result.succeeded} card pictures; ${result.failed} could not be made.`,
       );
-      void queryClient.invalidateQueries({ queryKey: ['import-images', importId] });
+      // Settings counts what is still missing, so it must not go stale here.
+      void queryClient.invalidateQueries({ queryKey: missingImagesKey });
     },
     [queryClient],
-  );
-
-  const makeImages = useCallback(
-    (importId: string) => {
-      void makeCardImages(importId);
-    },
-    [makeCardImages],
   );
 
   const runLoop = useCallback(
@@ -196,8 +186,6 @@ export function usePdfImportRunner(): PdfImportRunner {
     runError,
     lastWarnings,
     imageStatus,
-    makingImages,
-    makeImages,
     start,
     pause,
     reload,

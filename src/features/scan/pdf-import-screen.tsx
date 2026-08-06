@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import * as DocumentPicker from 'expo-document-picker';
 import { useKeepAwake } from 'expo-keep-awake';
 import { useRouter } from 'expo-router';
@@ -30,7 +30,7 @@ import { usePdfImportRunner } from '@/features/scan/use-pdf-import-runner';
 import { useTheme } from '@/hooks/use-theme';
 import { existingBookFile, keepBookFile } from '@/lib/book-file';
 import { extractPdfPages, isPdfPreviewAvailable } from '@/lib/pdf-preview';
-import { createPdfImport, listImportedCardIdsWithoutImages, uploadPdf } from '@/lib/queries';
+import { createPdfImport, uploadPdf } from '@/lib/queries';
 import { useBookFile } from '@/lib/stores';
 
 function KeepAwakeWhileRunning() {
@@ -101,8 +101,6 @@ interface ProgressStepProps {
   warnings: string[];
   /** Line about card pictures being made, or null when none are in flight. */
   imageStatus: string | null;
-  makingImages: boolean;
-  onMakeImages: () => void;
   onResume: () => void;
   onPause: () => void;
   onImportMorePages: () => void;
@@ -116,8 +114,6 @@ function ProgressStep({
   runError,
   warnings,
   imageStatus,
-  makingImages,
-  onMakeImages,
   onResume,
   onPause,
   onImportMorePages,
@@ -134,14 +130,6 @@ function ProgressStep({
   // across them, is what stops that looking like a stall.
   const readingNow = running ? describeReadingNow(importRecord) : null;
   const batchEnd = running ? inFlightBatchFraction(importRecord) : null;
-  // Imports before this screen learned to make pictures, and any card whose
-  // generation failed, both show up here so they can be filled in on demand.
-  const { data: imagelessCardIds } = useQuery({
-    queryKey: ['import-images', importRecord.id],
-    queryFn: () => listImportedCardIdsWithoutImages(importRecord.id),
-    enabled: done && !makingImages,
-  });
-  const imagesToMake = imagelessCardIds?.length ?? 0;
 
   return (
     <View style={styles.progressColumn}>
@@ -181,15 +169,6 @@ function ProgressStep({
       {done ? (
         <View style={styles.actions}>
           <Button label="See your library" icon="books.vertical" onPress={onOpenLibrary} />
-          {(imagesToMake > 0 || makingImages) && (
-            <Button
-              label={makingImages ? 'Making pictures' : `Make ${imagesToMake} card pictures`}
-              icon="photo"
-              variant="secondary"
-              loading={makingImages}
-              onPress={onMakeImages}
-            />
-          )}
           <Button
             label="Import more pages"
             icon="plus"
@@ -345,10 +324,6 @@ export function PdfImportScreen() {
         runError={runner.runError}
         warnings={runner.lastWarnings}
         imageStatus={runner.imageStatus}
-        makingImages={runner.makingImages}
-        onMakeImages={() => {
-          runner.makeImages(record.id);
-        }}
         onResume={() => {
           runner.start(record.id);
         }}
