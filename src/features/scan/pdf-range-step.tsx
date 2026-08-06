@@ -287,16 +287,13 @@ function PageBrowser({
         </View>
       </View>
       {Platform.OS === 'ios' && (
-        <InputAccessoryView nativeID={PAGE_FIELD_ACCESSORY}>
-          <View
-            style={[
-              styles.keyboardBar,
-              { backgroundColor: theme.backgroundElement, borderTopColor: theme.border },
-            ]}
-          >
+        <InputAccessoryView nativeID={PAGE_FIELD_ACCESSORY} backgroundColor="transparent">
+          {/* The keyboard's own corners are rounded, so a full width bar butted
+              against it reads as a seam. A floating pill sits above it instead. */}
+          <View style={styles.keyboardBar}>
             <Button
               label="Done"
-              variant="ghost"
+              variant="secondary"
               onPress={() => {
                 Keyboard.dismiss();
               }}
@@ -415,9 +412,8 @@ const styles = StyleSheet.create({
   },
   keyboardBar: {
     alignItems: 'flex-end',
-    borderTopWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.one,
+    paddingBottom: Spacing.two,
   },
   title: {
     fontSize: 17,

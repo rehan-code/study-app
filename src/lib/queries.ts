@@ -444,6 +444,26 @@ export async function createPdfImport(
 }
 
 /**
+ * Every card still waiting for a picture, whatever produced it. Cards whose
+ * picture was turned off are left alone; that is a deliberate choice, not a gap.
+ */
+export async function listCardIdsWithoutImages(): Promise<string[]> {
+  const { data, error } = await getSupabase()
+    .from('cards')
+    .select('id')
+    .eq('image_enabled', true)
+    .is('ai_image_path', null);
+  if (error !== null) {
+    raise('find the cards without pictures', error);
+  }
+  const parsed = insertedCardIdsSchema.safeParse(data);
+  if (!parsed.success) {
+    raise('find the cards without pictures', { message: 'select returned unexpected rows' });
+  }
+  return parsed.data.map((row) => row.id);
+}
+
+/**
  * Cards an import created that still have no picture. Imported cards are
  * inserted by the edge function, which never touches fal.ai, so generating
  * their images is the app's job once the pages are read.

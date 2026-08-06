@@ -12,8 +12,10 @@ import { MountOnFocus } from '@/components/mount-on-focus';
 import { Screen } from '@/components/screen';
 import { Stepper } from '@/components/stepper';
 import { ThemedText } from '@/components/themed-text';
+import { Button } from '@/components/button';
 import { ListDivider } from '@/features/library/list-divider';
 import { Section } from '@/features/library/section';
+import { useMissingCardImages } from '@/features/settings/use-missing-card-images';
 
 const NEW_CARDS_MIN = 5;
 const NEW_CARDS_MAX = 50;
@@ -34,6 +36,7 @@ function SettingsScreen() {
     useSettings();
   const [signingOut, setSigningOut] = useState(false);
 
+  const images = useMissingCardImages();
   const email = session?.user.email ?? 'Signed in';
   const version = Constants.expoConfig?.version ?? 'Unknown';
 
@@ -86,6 +89,19 @@ function SettingsScreen() {
                 onValueChange={setAiImagesEnabled}
                 trackColor={{ true: theme.primary }}
               />
+            }
+          />
+          <ListDivider />
+          <ListRow
+            title="Missing pictures"
+            subtitle={images.summary}
+            onPress={images.running || images.missing === 0 ? undefined : images.generate}
+            right={
+              images.running ? (
+                <ActivityIndicator color={theme.primary} />
+              ) : images.missing > 0 ? (
+                <Button label="Make them" variant="secondary" onPress={images.generate} />
+              ) : null
             }
           />
           <ListDivider />
