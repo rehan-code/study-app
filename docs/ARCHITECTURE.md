@@ -383,6 +383,50 @@ with a 4xx/5xx status and a message safe to show in the UI. Shared helpers in
 `supabase/functions/_shared/`. Mirror of the parsed-scan zod contract lives in
 `_shared/parsed-scan-contract.ts` with a sync comment.
 
+### import-pdf-batch
+
+Request `{ importId: string }`. Claims one batch of `BATCH_PAGES` (6) pages, extracts them
+with unpdf/pdf.js as positioned text items, and sends that text to Anthropic with a forced
+tool call. It reads text, never page images.
+
+Extraction is the delicate part. pdf.js returns the items in DRAWING order, and in this book
+every haraka that sits on a word's final letter is a zero-advance glyph drawn just before
+that word, so bidi reordering strands it ahead of the word it belongs to: sometimes as an
+item of its own, sometimes wedged onto the front of the next item's string. Left alone the
+text reads مُحَمَّد where the page prints مُحَمَّدٌ, which silently deletes every tanween in
+the book (tanween only ever falls on a final letter). `reattachDisplacedMarks`
+(`_shared/arabic-marks.ts`) walks the items in drawing order and gives each word the marks
+left over from the item drawn before it, unpacking precomposed forms such as U+FC5E (shadda
+with dammatan) and dropping the space or tatweel they ride on. It must run BEFORE the sort
+into reading order, because that drawing order is the only thing that says which word a
+detached mark belongs to. A mark drawn over a word outranks one still being carried, and
+anything that cannot be placed is passed through untouched rather than guessed onto a word.
+
+Repairing the glyphs still leaves the harakat only as good as the typesetting, so the parsed
+rows then go through a second, independent pass (`vocalizeLessons`) that treats the printed
+LETTERS as the truth and derives the vowelling from knowledge of Arabic instead. Each Arabic
+cell is sent with its column's grammatical role (`ROLE_LABELS`: past tense verb, masdar,
+broken plural, active participle...) and the row's English meaning, which together decide
+which reading of the letters is meant: كتب is كَتَبَ in the past column and كُتُبٌ in the
+plural column, and nothing but the role can tell them apart. This is also why a dictionary
+lookup does not fit: a verbs row needs seven separate cells vowelled (past, preposition,
+present, imperative, masdar, and both participles), which is a paradigm, not a headword.
+
+Nothing that comes back is trusted on its own. `chooseVocalized` (`_shared/vocalize.ts`)
+keeps a proposal only if it is the SAME word: identical letters once marks, tatweel, spacing,
+presentation forms and the Urdu lookalikes this book's fonts substitute (`ھ ک ی`) are folded
+away by `arabicSkeleton`. So the pass can add harakat, correct harakat and rewrite
+presentation forms into ordinary Arabic, but it cannot swap in a different word than the page
+prints. It is monotonic too: a proposal carrying fewer marks than the page is dropped, so a
+vague answer can never strip vowelling the book already had. A cell whose letters are
+themselves corrupt (the broken heading font leaves ASCII inside the word, about 0.5% of
+items) fails the guard and simply keeps what was printed.
+
+`vocalizationTargets` and `applyVocalizations` share one internal walk, so the cells that get
+asked about and the cells that get written back cannot drift out of step. The calls are
+chunked (`VOCALIZE_CHUNK`, 100 cells) and run concurrently, and the whole pass is best
+effort: any failure is logged and the batch lands with the printed forms rather than failing.
+
 ### parse-scan
 
 Request `{ scanId: string }`. Load scan (404 if missing), reject if status is `reviewed`,
@@ -519,7 +563,8 @@ source that still have none, including scans whose generation failed.
 
 ## Testing
 
-- vitest, colocated `*.test.ts` next to domain modules (`npm test`).
+- vitest, colocated `*.test.ts` next to domain modules, plus the pure helpers in
+  `supabase/functions/_shared/` (`npm test`).
 - Cover: happy paths, edge cases (empty queues, single-card sessions, undo at boundaries,
   marker at row 0, marker beyond last row, duplicate distractors, '-' cells), invalid input
   (zod rejections), and determinism (seeded rng).

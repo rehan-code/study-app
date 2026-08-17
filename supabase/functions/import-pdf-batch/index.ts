@@ -5,12 +5,27 @@ import { getDocumentProxy } from 'npm:unpdf@1.6.2';
 import { errorResponse, handleOptions, HttpError, jsonResponse } from '../_shared/http.ts';
 import { clientFromRequest } from '../_shared/supabase.ts';
 import { PARSED_FIELD_KEYS, type ScanKind } from '../_shared/parsed-scan-contract.ts';
+import { reattachDisplacedMarks, type PositionedText } from '../_shared/arabic-marks.ts';
+import {
+  applyVocalizations,
+  vocalizationTargets,
+  type VocalizationTarget,
+} from '../_shared/vocalize.ts';
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_MODEL = 'claude-sonnet-5';
 const MAX_OUTPUT_TOKENS = 16000;
 const TOOL_NAME = 'record_imported_pages';
+const VOCALIZE_TOOL_NAME = 'record_vocalized_words';
+
+/**
+ * Words per vocalization call. Each answer is one short word, so a hundred of
+ * them sit well inside the output budget while keeping the batch to a handful
+ * of concurrent calls.
+ */
+const VOCALIZE_CHUNK = 100;
+const VOCALIZE_MAX_OUTPUT_TOKENS = 8000;
 
 /**
  * A hung Anthropic request would otherwise run until the edge runtime kills
@@ -88,12 +103,6 @@ const importedPagesSchema = z.object({
 type ImportedRow = z.infer<typeof importedRowSchema>;
 type ImportedLesson = z.infer<typeof importedLessonSchema>;
 
-interface PositionedItem {
-  text: string;
-  x: number;
-  y: number;
-}
-
 async function downloadPdf(supabase: SupabaseClient, path: string): Promise<Uint8Array> {
   const { data, error } = await supabase.storage.from('scans').download(path);
   if (error || !data) {
@@ -112,15 +121,15 @@ async function extractPositionedPages(
   pdfBytes: Uint8Array,
   fromPage: number,
   toPage: number,
-): Promise<{ totalPages: number; pages: { page: number; items: PositionedItem[] }[] }> {
+): Promise<{ totalPages: number; pages: { page: number; items: PositionedText[] }[] }> {
   const document = await getDocumentProxy(pdfBytes);
   const totalPages = document.numPages;
-  const pages: { page: number; items: PositionedItem[] }[] = [];
+  const pages: { page: number; items: PositionedText[] }[] = [];
   const lastPage = Math.min(toPage, totalPages);
   for (let pageNumber = fromPage; pageNumber <= lastPage; pageNumber += 1) {
     const page = await document.getPage(pageNumber);
     const content = await page.getTextContent();
-    const items: PositionedItem[] = [];
+    const drawn: PositionedText[] = [];
     for (const item of content.items) {
       if (typeof item !== 'object' || item === null || !('str' in item)) {
         continue;
@@ -133,8 +142,11 @@ async function extractPositionedPages(
       const matrix = Array.isArray(transform) ? transform : [];
       const x = typeof matrix[4] === 'number' ? Math.round(matrix[4]) : 0;
       const y = typeof matrix[5] === 'number' ? Math.round(matrix[5]) : 0;
-      items.push({ text, x, y });
+      drawn.push({ text, x, y });
     }
+    // Must run on the drawing order pdf.js returns, before any sorting: that
+    // order is what says which word a detached haraka belongs to.
+    const items = reattachDisplacedMarks(drawn);
     // Reading order: top of the page first, right to left within a line.
     items.sort((a, b) => (a.y === b.y ? b.x - a.x : b.y - a.y));
     pages.push({ page: pageNumber, items });
@@ -142,7 +154,7 @@ async function extractPositionedPages(
   return { totalPages, pages };
 }
 
-function serializePages(pages: { page: number; items: PositionedItem[] }[]): string {
+function serializePages(pages: { page: number; items: PositionedText[] }[]): string {
   return pages
     .map((entry) => {
       const lines = entry.items.map((item) => `[x=${item.x} y=${item.y}] ${item.text}`);
@@ -256,11 +268,16 @@ function mapAnthropicError(status: number, bodyText: string): HttpError {
   return new HttpError(GENERIC_ERROR, 502);
 }
 
-async function requestParseFromClaude(
-  serializedPages: string,
-  currentLesson: string | null,
-  startsAtBookStart: boolean,
-): Promise<unknown> {
+interface ToolCallRequest {
+  maxTokens: number;
+  toolName: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  content: string[];
+}
+
+/** One forced tool call; returns the tool input for the caller to validate. */
+async function callAnthropicTool(request: ToolCallRequest): Promise<unknown> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) {
     throw new HttpError("AI parsing isn't set up yet. Add the ANTHROPIC_API_KEY secret.", 500);
@@ -279,22 +296,19 @@ async function requestParseFromClaude(
       },
       body: JSON.stringify({
         model,
-        max_tokens: MAX_OUTPUT_TOKENS,
+        max_tokens: request.maxTokens,
         tools: [
           {
-            name: TOOL_NAME,
-            description: 'Record the structured vocabulary extracted from these book pages.',
-            input_schema: buildToolInputSchema(),
+            name: request.toolName,
+            description: request.description,
+            input_schema: request.inputSchema,
           },
         ],
-        tool_choice: { type: 'tool', name: TOOL_NAME },
+        tool_choice: { type: 'tool', name: request.toolName },
         messages: [
           {
             role: 'user',
-            content: [
-              { type: 'text', text: serializedPages },
-              { type: 'text', text: buildInstruction(currentLesson, startsAtBookStart) },
-            ],
+            content: request.content.map((text) => ({ type: 'text', text })),
           },
         ],
       }),
@@ -326,6 +340,150 @@ async function requestParseFromClaude(
   }
   console.error('import-pdf-batch: no tool_use block in Anthropic response');
   throw new HttpError(GENERIC_ERROR, 502);
+}
+
+function requestParseFromClaude(
+  serializedPages: string,
+  currentLesson: string | null,
+  startsAtBookStart: boolean,
+): Promise<unknown> {
+  return callAnthropicTool({
+    maxTokens: MAX_OUTPUT_TOKENS,
+    toolName: TOOL_NAME,
+    description: 'Record the structured vocabulary extracted from these book pages.',
+    inputSchema: buildToolInputSchema(),
+    content: [serializedPages, buildInstruction(currentLesson, startsAtBookStart)],
+  });
+}
+
+/**
+ * What each column is grammatically. This is what makes the vowelling
+ * decidable: "kataba" and "kutiba" share their letters, and only the role plus
+ * the English meaning say which one the page means.
+ */
+const ROLE_LABELS: Record<string, string> = {
+  'nouns.arabic': 'singular noun',
+  'nouns.plural1': 'plural of that noun',
+  'nouns.plural2': 'second plural of that noun',
+  'nouns.synonym': 'a synonym, singular noun',
+  'nouns.synonymPlural': 'plural of that synonym',
+  'nouns.antonym': 'an antonym, singular noun',
+  'nouns.antonymPlural': 'plural of that antonym',
+  'verbs.past': 'past tense verb, third person masculine singular',
+  'verbs.preposition': 'preposition this verb takes',
+  'verbs.present': 'present tense verb, third person masculine singular',
+  'verbs.imperative': 'imperative, second person masculine singular',
+  'verbs.masdar': 'masdar, the verbal noun',
+  'verbs.activeParticiple': 'active participle',
+  'verbs.passiveParticiple': 'passive participle',
+  'phrases.arabic': 'expression or phrase',
+};
+
+function describeRole(role: string): string {
+  return ROLE_LABELS[role] ?? (role.endsWith('.note') ? 'example sentence' : role);
+}
+
+const vocalizedWordsSchema = z.object({
+  words: z.array(z.object({ index: z.number().int().nonnegative(), vocalized: z.string() })),
+});
+
+function buildVocalizeSchema(): Record<string, unknown> {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['words'],
+    properties: {
+      words: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['index', 'vocalized'],
+          properties: {
+            index: { type: 'integer', minimum: 0 },
+            vocalized: { type: 'string' },
+          },
+        },
+      },
+    },
+  };
+}
+
+const VOCALIZE_INSTRUCTION = [
+  'Each entry below is one cell of a Modern Standard Arabic vocabulary table, with the grammatical role of its column and the English meaning of its row. The printed harakat may be incomplete or wrong, because they were recovered from a PDF.',
+  'For every entry, return that same word written with full, correct harakat, from your own knowledge of Arabic. The role and the meaning tell you which reading of the letters is intended.',
+  'Rules:',
+  '- Never change the letters. Same consonants, same hamza seat, same taa marbuta, same alif maqsura, same number of words. Only marks may be added or corrected.',
+  '- Write ordinary Arabic letters even where the input uses presentation forms or Urdu lookalikes.',
+  '- Vowel the FINAL letter too, which is what the page most often loses: an indefinite singular noun takes tanween, a past tense verb ends in fatha, a present tense verb ends in damma, and so on.',
+  '- Mark every internal vowel, shadda and sukun as well, so the word is fully vowelled.',
+  '- If you are not confident of the correct vowelling, return the text exactly as given.',
+  `Call the ${VOCALIZE_TOOL_NAME} tool exactly once, with one entry per index you were given.`,
+].join('\n');
+
+/**
+ * Asks for the correct harakat for one chunk of cells. A failure here is not
+ * worth losing a parsed batch over, so it resolves to nothing and those cells
+ * keep whatever the page gave them.
+ */
+async function vocalizeChunk(targets: VocalizationTarget[]): Promise<Map<number, string>> {
+  const payload = targets
+    .map((target) =>
+      JSON.stringify({
+        index: target.index,
+        role: describeRole(target.role),
+        meaning: target.meaning ?? '',
+        text: target.text,
+      }),
+    )
+    .join('\n');
+  const vocalized = new Map<number, string>();
+  try {
+    const toolInput = await callAnthropicTool({
+      maxTokens: VOCALIZE_MAX_OUTPUT_TOKENS,
+      toolName: VOCALIZE_TOOL_NAME,
+      description: 'Record each word written with its full, correct harakat.',
+      inputSchema: buildVocalizeSchema(),
+      content: [payload, VOCALIZE_INSTRUCTION],
+    });
+    const parsed = vocalizedWordsSchema.safeParse(toolInput);
+    if (!parsed.success) {
+      console.error('import-pdf-batch: vocalization output failed validation', parsed.error);
+      return vocalized;
+    }
+    for (const word of parsed.data.words) {
+      vocalized.set(word.index, word.vocalized);
+    }
+  } catch (error) {
+    console.error('import-pdf-batch: vocalization call failed', error);
+  }
+  return vocalized;
+}
+
+/**
+ * Replaces the harakat the PDF gave with harakat worked out from the letters,
+ * the column's role and the English meaning. Every proposal is checked against
+ * the printed letters before it is kept, so this cannot change which word a
+ * card holds; see _shared/vocalize.ts.
+ */
+async function vocalizeLessons(lessons: readonly ImportedLesson[]): Promise<void> {
+  const targets = vocalizationTargets(lessons, PARSED_FIELD_KEYS);
+  if (targets.length === 0) {
+    return;
+  }
+  const chunks: VocalizationTarget[][] = [];
+  for (let start = 0; start < targets.length; start += VOCALIZE_CHUNK) {
+    chunks.push(targets.slice(start, start + VOCALIZE_CHUNK));
+  }
+  const results = await Promise.all(chunks.map((chunk) => vocalizeChunk(chunk)));
+  const proposals = new Map<number, string>();
+  for (const result of results) {
+    for (const [index, word] of result) {
+      proposals.set(index, word);
+    }
+  }
+  const { changed, kept } = applyVocalizations(lessons, PARSED_FIELD_KEYS, proposals);
+  console.log('import-pdf-batch: vocalized', { cells: targets.length, changed, kept });
 }
 
 function normalizeFields(kind: ScanKind, row: ImportedRow): Record<string, string | null> {
@@ -542,6 +700,11 @@ Deno.serve(async (req) => {
       console.error('import-pdf-batch: tool output failed validation', validated.error);
       throw new HttpError('The AI returned an unexpected result. Resume to retry this batch.', 502);
     }
+
+    // The page's own harakat are only as good as its glyphs, so the vowelling
+    // is worked out from the letters and the meaning instead. Best effort: if
+    // it cannot run, the batch still lands with the printed forms.
+    await vocalizeLessons(validated.data.lessons);
 
     // The Claude call is slow; a resume issued meanwhile may have reclaimed
     // the batch. Re-check ownership so a superseded run exits before touching
