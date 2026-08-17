@@ -460,9 +460,13 @@ Feature components live in `src/features/{study,quiz,scan,library}/`.
 
 ### Study session UX (src/features/study)
 
-Deck of one visible card: front shows `cardHeadline` (ArabicType.hero, centered) and, when
-`imageEnabled && aiImagesEnabled && aiImagePath`, the card image above it; tap flips to the
-back (meaning prominent + `cardDetailRows` table). Swipe right = got it (success tint as it
+Deck of one visible card: front shows `cardHeadline` (ArabicType.hero, centered) and nothing
+else, because the picture is a hint; tap flips to the back (the card image when
+`imageEnabled && aiImagesEnabled && aiImagePath`, meaning prominent, `cardDetailRows` table).
+`RefreshImageButton` sits in the back's top right corner as a bare icon, no box around it: it
+calls `generateCardImage` again and invalidates only the signed URL, since the new picture
+overwrites the same storage path. Its tap blocks the deck's tap (`blocksExternalGesture`), so
+pressing it replaces the picture instead of flipping the card. Swipe right = got it (success tint as it
 moves), swipe left = not yet (accent tint); equivalent buttons below the deck plus an Undo
 button. Answers persist immediately via `applyReview` (fire-and-forget with error toast and
 undo-safe ordering); progress bar on top; completion screen with summary counts and a
