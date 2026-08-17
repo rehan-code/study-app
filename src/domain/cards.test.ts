@@ -251,7 +251,7 @@ describe('cardHeadline', () => {
 });
 
 describe('cardDetailRows', () => {
-  it('lists non-empty fields in label order, excluding headline and preposition', () => {
+  it('lists non-empty fields in label order, leading with the past tense', () => {
     const card = verbCard(
       verbFields({
         ...EMPTY_VERB_RAW,
@@ -265,19 +265,31 @@ describe('cardDetailRows', () => {
       'To call',
     );
     const rows = cardDetailRows(card);
-    expect(rows.map((row) => row.key)).toEqual(['present', 'imperative', 'masdar', 'note']);
-    expect(rows[0].value).toBe('يَتَّصِلُ');
-    expect(rows[0].labelArabic).toBe('المضارع');
+    expect(rows.map((row) => row.key)).toEqual(['past', 'present', 'imperative', 'masdar', 'note']);
+    expect(rows[1].value).toBe('يَتَّصِلُ');
+    expect(rows[1].labelArabic).toBe('المضارع');
   });
 
-  it('omits empty optional fields on sparse vocab cards', () => {
+  it('keeps the preposition attached to the past tense row instead of listing it', () => {
+    const card = verbCard(
+      verbFields({ ...EMPTY_VERB_RAW, past: 'اِتَّصَلَ', preposition: 'بـ' }),
+      'To call',
+    );
+    const rows = cardDetailRows(card);
+    expect(rows.map((row) => row.key)).toEqual(['past']);
+    expect(rows[0].value).toBe('اِتَّصَلَ بـ');
+    expect(rows[0].label).toBe('Past');
+  });
+
+  it('omits empty optional fields on sparse vocab cards but keeps the singular', () => {
     const card = vocabCard(
       vocabFields({ ...EMPTY_VOCAB_RAW, arabic: 'يَمِين', antonym: 'يَسَار' }),
       'Right side',
     );
     const rows = cardDetailRows(card);
-    expect(rows.map((row) => row.key)).toEqual(['antonym']);
-    expect(rows[0].value).toBe('يَسَار');
+    expect(rows.map((row) => row.key)).toEqual(['arabic', 'antonym']);
+    expect(rows[0].value).toBe('يَمِين');
+    expect(rows[1].value).toBe('يَسَار');
   });
 });
 
