@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react';
 import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, type GestureType } from 'react-native-gesture-handler';
 import Animated, {
   Extrapolation,
   interpolate,
@@ -18,6 +18,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing, type ThemeColor } from '@/constants/theme';
 import { cardDetailRows, cardHeadline, type Card } from '@/domain/cards';
 import type { ReviewResult } from '@/domain/srs';
+import { RefreshImageButton } from '@/features/study/refresh-image-button';
 import { useTheme } from '@/hooks/use-theme';
 
 const SWIPE_DISTANCE = 120;
@@ -27,7 +28,7 @@ const MAX_ROTATION_DEG = 12;
 const VERTICAL_DRAG_FACTOR = 0.4;
 const EXIT_DURATION_MS = 220;
 const FLIP_DURATION_MS = 280;
-const BACK_IMAGE_HEIGHT = 120;
+const BACK_IMAGE_HEIGHT = 160;
 const CARD_IMAGE_RATIO = 4 / 3;
 const REST_SPRING = { damping: 18, stiffness: 220 } as const;
 
@@ -73,18 +74,31 @@ function CardFront({ card }: { card: Card }) {
   );
 }
 
-function CardBack({ card, showImages }: { card: Card; showImages: boolean }) {
+function CardBack({
+  card,
+  showImages,
+  deckTapGesture,
+}: {
+  card: Card;
+  showImages: boolean;
+  /** Left out on a card that is flying away: its picture is no longer worth replacing. */
+  deckTapGesture?: GestureType;
+}) {
   const theme = useTheme();
   const rows = cardDetailRows(card);
+  const showsImage = cardShowsImage(card, showImages) && card.aiImagePath !== null;
   return (
     <View style={styles.faceContent}>
-      {cardShowsImage(card, showImages) && card.aiImagePath !== null && (
+      {showsImage && card.aiImagePath !== null && (
         <CardImage
           bucket="card-images"
           path={card.aiImagePath}
           height={BACK_IMAGE_HEIGHT}
           aspectRatio={CARD_IMAGE_RATIO}
         />
+      )}
+      {showsImage && deckTapGesture !== undefined && (
+        <RefreshImageButton cardId={card.id} deckTapGesture={deckTapGesture} />
       )}
       <ThemedText type="subtitle" style={styles.centeredText}>
         {card.meaning}
@@ -210,8 +224,10 @@ interface CardGestureConfig {
 /**
  * Built outside the component so writing shared values in the gesture worklets
  * stays out of React render scope (the compiler treats render values as frozen).
+ * Returns the pieces unraced so the caller can still relate them to gestures
+ * that live further down the tree.
  */
-function makeCardGesture({
+function makeCardGestures({
   enabled,
   translateX,
   translateY,
@@ -250,7 +266,7 @@ function makeCardGesture({
         runOnJS(toggleFace)();
       }
     });
-  return Gesture.Race(pan, tap);
+  return { pan, tap };
 }
 
 /**
@@ -298,7 +314,7 @@ function InteractiveCard({
 
   useImperativeHandle(ref, () => ({ answer: answerFromButton }));
 
-  const gesture = makeCardGesture({
+  const { pan, tap } = makeCardGestures({
     enabled: interactive,
     translateX,
     translateY,
@@ -306,6 +322,7 @@ function InteractiveCard({
     commitFromGesture,
     toggleFace,
   });
+  const gesture = Gesture.Race(pan, tap);
 
   const dragStyle = useAnimatedStyle(() => ({
     transform: [
@@ -360,7 +377,8 @@ function InteractiveCard({
           pointerEvents={isBack ? 'auto' : 'none'}
           style={[styles.face, styles.absoluteFace, faceColors, backFlipStyle]}
         >
-          <CardBack card={card} showImages={showImages} />
+          {/* The back's refresh icon blocks this tap, so pressing it never flips the card. */}
+          <CardBack card={card} showImages={showImages} deckTapGesture={tap} />
         </Animated.View>
         <Animated.View pointerEvents="none" style={[styles.overlayLayer, gotItOverlayStyle]}>
           <AnswerOverlay label="Got it" softColor="successSoft" strongColor="success" />

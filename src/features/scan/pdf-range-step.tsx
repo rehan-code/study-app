@@ -149,8 +149,24 @@ function PageNumbersForm({
   );
 }
 
-/** A number pad has no return key, so the jump field needs its own Done. */
-const PAGE_FIELD_ACCESSORY = 'pdf-page-field';
+/**
+ * A number pad has no return key, so the jump field needs its own Done, and the
+ * pairing id has to be fresh for every browser. iOS pools text input views: the
+ * second browser is handed back the first one's view, which had its accessory
+ * id wiped on the way into the pool, and the id is only written back onto it
+ * when the incoming value differs from the one it was carrying. A fixed id
+ * looks unchanged, so nothing is written back, and the chip has no field left
+ * to attach itself to.
+ */
+let accessoryCount = 0;
+
+function usePageFieldAccessory(): string {
+  const [id] = useState(() => {
+    accessoryCount += 1;
+    return `pdf-page-field-${accessoryCount}`;
+  });
+  return id;
+}
 
 interface PageBrowserProps {
   localUri: string;
@@ -175,6 +191,7 @@ function PageBrowser({
   onStart,
 }: PageBrowserProps) {
   const theme = useTheme();
+  const accessoryId = usePageFieldAccessory();
   const opening = clampPage(startAtPage, totalPages);
   const [page, setPage] = useState(opening);
   const [pageText, setPageText] = useState(String(opening));
@@ -243,7 +260,7 @@ function PageBrowser({
               }}
               keyboardType="number-pad"
               textAlign="center"
-              inputAccessoryViewID={Platform.OS === 'ios' ? PAGE_FIELD_ACCESSORY : undefined}
+              inputAccessoryViewID={Platform.OS === 'ios' ? accessoryId : undefined}
             />
           </View>
           <Text style={[styles.statusText, { color: theme.textSecondary }]}>of {totalPages}</Text>
@@ -287,7 +304,7 @@ function PageBrowser({
         </View>
       </View>
       {Platform.OS === 'ios' && (
-        <InputAccessoryView nativeID={PAGE_FIELD_ACCESSORY} backgroundColor="transparent">
+        <InputAccessoryView nativeID={accessoryId} backgroundColor="transparent">
           {/* The keyboard's own corners are rounded, so a full width bar butted
               against it reads as a seam. A floating pill sits above it instead. */}
           <View style={styles.keyboardBar}>

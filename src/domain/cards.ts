@@ -208,16 +208,20 @@ export interface CardDetailRow {
   value: string;
 }
 
-/** Non-empty fields for the back of a flashcard and the card detail screen, headline excluded. */
+/**
+ * Non-empty fields for the back of a flashcard, headline row included so the word
+ * asked on the front stays readable next to its other forms after the flip.
+ */
 export function cardDetailRows(card: Card): CardDetailRow[] {
   const headlineKey = card.type === 'verb' ? 'past' : 'arabic';
   const fields = card.fields as Record<string, string | null>;
   const rows: CardDetailRow[] = [];
   for (const labelDef of FIELD_LABELS[card.type]) {
-    if (labelDef.key === headlineKey || labelDef.key === 'preposition') {
+    // A verb's preposition rides along with the past tense in the headline value.
+    if (labelDef.key === 'preposition') {
       continue;
     }
-    const value = fields[labelDef.key];
+    const value = labelDef.key === headlineKey ? cardHeadline(card) : fields[labelDef.key];
     if (typeof value === 'string' && value.length > 0) {
       rows.push({ ...labelDef, value });
     }
