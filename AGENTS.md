@@ -36,7 +36,7 @@ Read the exact versioned docs at https://docs.expo.dev/versions/v57.0.0/ before 
 ## Commands
 
 - `npm start`: dev server; scan the QR with Expo Go on the iPhone
-- `npm test` / `npm run test:watch`: vitest over src
+- `npm test` / `npm run test:watch`: vitest over src and `supabase/functions/_shared`
 - `npm run typecheck`: tsc, app code only (supabase/functions excluded)
 - `npm run lint`: eslint via expo
 - `npm run format`: prettier
