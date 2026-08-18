@@ -79,8 +79,27 @@ tables carry the same columns as the scan kinds, plus an expressions layout:
 
 التعبير | المعنى | الجملة (expression, English meaning, example sentence)
 
-which maps to phrase cards with the example sentence in note. The PDF is
-digitally generated with a full text layer, so `import-pdf-batch` extracts
-positioned text (no page rendering) and Claude reconstructs the tables from
-coordinates. Blank student-fill tables (headers only) are skipped; lesson
+which maps to phrase cards with the example sentence in note. Those columns run
+right to left, so التعبير sits farthest right and الجملة farthest left with the
+English between them: on any row, Arabic right of the English is the expression
+and Arabic left of it is the sentence. The card asks the expression alone, and
+the sentence normally quotes it inside a longer clause, so a card fronted by a
+whole sentence means the two columns were swapped.
+
+The PDF is digitally generated with a full text layer, so `import-pdf-batch`
+extracts positioned text (no page rendering) and Claude reconstructs the tables
+from coordinates. Harakat and cells of one row carry slightly different
+baselines, so the extractor groups items into visual lines within a few points
+of each other before serializing: one output line per table row, its pieces
+right to left. A long English meaning still wraps onto a short line of its own
+just above or below its row.
+
+Some page ranges embed fonts whose text layer uses legacy Arabic
+presentation-form codepoints and Urdu/Farsi letter shapes (ھ ی ک for ه ي ك).
+The extractor normalizes every item back to real Arabic letters before Claude
+sees it: NFKC, rejoining the harakat that ligature decomposition detaches, and
+moving lam-alef ligature marks back onto the lam. Cards must always store
+standard Arabic codepoints so text matches across PDF imports and photo scans.
+
+Blank student-fill tables (headers only) are skipped; lesson
 headings like الدرس الأول become "Lesson 1" with position set for ordering.

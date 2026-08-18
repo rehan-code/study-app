@@ -94,6 +94,75 @@ interface PositionedItem {
   y: number;
 }
 
+/** One visual line of a page: the pieces sharing a baseline, ordered right to left. */
+interface PageLine {
+  y: number;
+  items: PositionedItem[];
+}
+
+/**
+ * Baselines closer than this belong to the same visual line. Harakat are their
+ * own text items a point or two above the letter they sit on, and cells across
+ * one table row rarely share an exact baseline, so grouping on equality split a
+ * row over several lines and shuffled its columns out of reading order: a 1pt
+ * drift was enough to emit the leftmost column before the rightmost one. Table
+ * rows in this book sit about 31pt apart, so 6 stays well clear of the next row.
+ */
+const LINE_TOLERANCE = 6;
+
+/**
+ * Parts of the book embed fonts that put Arabic into legacy presentation-form
+ * codepoints (U+FB50-U+FEFF) and borrow Urdu/Farsi letter shapes, which the
+ * cards then store verbatim: they render oddly and never match text from the
+ * photographed scans. NFKC maps presentation forms back to real letters, but
+ * decomposes a shadda/haraka ligature into a SPACE plus the mark, splitting the
+ * word it sat on, so that space is stripped before anything else. Verified
+ * against Lesson 15 (book page 162), the page that surfaced every variant.
+ */
+const DETACHED_HARAKA = /[\s ]+(?=[ً-ٰٕ])/gu;
+const FOREIGN_LETTERS: readonly [RegExp, string][] = [
+  [/[ھہ]/gu, 'ه'],
+  [/ی/gu, 'ي'],
+  [/ک/gu, 'ك'],
+];
+// Lam-alef arrives as one ligature glyph, so its marks land after the alef in
+// the text layer; in لَا and لِأَ the first mark belongs on the lam.
+const LAM_ALEF_FIXES: readonly [RegExp, string][] = [
+  [/لاَ/gu, 'لَا'],
+  [/لأَِ/gu, 'لِأَ'],
+];
+
+function normalizeArabic(raw: string): string {
+  let text = raw.normalize('NFKC').replace(DETACHED_HARAKA, '');
+  for (const [pattern, replacement] of FOREIGN_LETTERS) {
+    text = text.replace(pattern, replacement);
+  }
+  for (const [pattern, replacement] of LAM_ALEF_FIXES) {
+    text = text.replace(pattern, replacement);
+  }
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function groupIntoLines(items: PositionedItem[]): PageLine[] {
+  // Top of the page first, right to left within a line: Arabic reading order.
+  const sorted = [...items].sort((a, b) => (a.y === b.y ? b.x - a.x : b.y - a.y));
+  const lines: PageLine[] = [];
+  for (const item of sorted) {
+    // Measured against the line's own top, never its last item, so a column of
+    // near-misses cannot chain a whole page into one line.
+    const open = lines.at(-1);
+    if (open && open.y - item.y <= LINE_TOLERANCE) {
+      open.items.push(item);
+      continue;
+    }
+    lines.push({ y: item.y, items: [item] });
+  }
+  for (const line of lines) {
+    line.items.sort((a, b) => b.x - a.x);
+  }
+  return lines;
+}
+
 async function downloadPdf(supabase: SupabaseClient, path: string): Promise<Uint8Array> {
   const { data, error } = await supabase.storage.from('scans').download(path);
   if (error || !data) {
@@ -112,10 +181,10 @@ async function extractPositionedPages(
   pdfBytes: Uint8Array,
   fromPage: number,
   toPage: number,
-): Promise<{ totalPages: number; pages: { page: number; items: PositionedItem[] }[] }> {
+): Promise<{ totalPages: number; pages: { page: number; lines: PageLine[] }[] }> {
   const document = await getDocumentProxy(pdfBytes);
   const totalPages = document.numPages;
-  const pages: { page: number; items: PositionedItem[] }[] = [];
+  const pages: { page: number; lines: PageLine[] }[] = [];
   const lastPage = Math.min(toPage, totalPages);
   for (let pageNumber = fromPage; pageNumber <= lastPage; pageNumber += 1) {
     const page = await document.getPage(pageNumber);
@@ -125,7 +194,7 @@ async function extractPositionedPages(
       if (typeof item !== 'object' || item === null || !('str' in item)) {
         continue;
       }
-      const text = String(item.str).trim();
+      const text = normalizeArabic(String(item.str));
       if (text.length === 0) {
         continue;
       }
@@ -135,17 +204,19 @@ async function extractPositionedPages(
       const y = typeof matrix[5] === 'number' ? Math.round(matrix[5]) : 0;
       items.push({ text, x, y });
     }
-    // Reading order: top of the page first, right to left within a line.
-    items.sort((a, b) => (a.y === b.y ? b.x - a.x : b.y - a.y));
-    pages.push({ page: pageNumber, items });
+    pages.push({ page: pageNumber, lines: groupIntoLines(items) });
   }
   return { totalPages, pages };
 }
 
-function serializePages(pages: { page: number; items: PositionedItem[] }[]): string {
+/** One output line per visual line, so a table row arrives as a row. */
+function serializePages(pages: { page: number; lines: PageLine[] }[]): string {
   return pages
     .map((entry) => {
-      const lines = entry.items.map((item) => `[x=${item.x} y=${item.y}] ${item.text}`);
+      const lines = entry.lines.map((line) => {
+        const pieces = line.items.map((item) => `[x=${item.x}] ${item.text}`);
+        return `[y=${line.y}] ${pieces.join('  ')}`;
+      });
       return `=== PAGE ${entry.page} ===\n${lines.join('\n')}`;
     })
     .join('\n\n');
@@ -223,14 +294,16 @@ function buildInstruction(currentLesson: string | null, startsAtBookStart: boole
       'This batch starts partway through the book and no earlier pages were read, so it may open in the middle of a lesson. If these pages start with table rows before any lesson heading, put them in a first group titled from whatever heading or running header is visible, with continuesPreviousBatch=true and lessonNumber set only if the lesson number is actually printed on these pages.';
   }
   return [
-    'You are reading consecutive pages of "Kashf Al-Mufradaat", a printed Arabic vocabulary curriculum. Each page of the PDF was extracted as positioned text items: [x= y=] coordinates followed by the text. Higher y is higher on the page; Arabic tables read right to left, so within a row larger x comes first.',
+    'You are reading consecutive pages of "Kashf Al-Mufradaat", a printed Arabic vocabulary curriculum. Each page of the PDF was extracted as positioned text: one output line per visual line of the page, written as [y=...] followed by that line\'s pieces, each as [x=...] text. Higher y is higher on the page, and a line\'s pieces are already in Arabic reading order, right to left, so larger x comes first. Harakat often arrive as their own piece beside the letter they sit on; join them back onto the word.',
     continuation,
     'The book repeats one structure per lesson: a heading like الدَّرْسُ الأَوَّلُ (report its ordinal as lessonNumber, 1 for الأول, 2 for الثاني...), lesson text (dialogues or reading passages, NOT vocabulary rows: skip it), then vocabulary tables.',
+    "Every table column keeps its own band of x, and one table row is normally one output line. The column headers are the table's first line, so their x values say where each band sits: place each piece of a row in the band its x falls in, and never merge two columns into one value.",
+    "An English meaning too long for its cell wraps onto its own short line just above or below the row it belongs to, sitting in the same x band. Join those fragments into that row's single meaning; a line holding only wrapped English is never a row of its own.",
     'Table types, recognized by their column headers:',
     '- Nouns: المفرد -> "arabic", الجمع الأول -> "plural1", الجمع الثاني -> "plural2", المعنى -> meaning (English).',
     '- Synonyms page: المرادف -> "synonym", its الجمع -> "synonymPlural", المضاد -> "antonym", its الجمع -> "antonymPlural". These columns extend the nouns of the SAME lesson: merge them into the nouns rows by row order when both tables have content, or skip the page when the table is blank.',
     '- Verbs: الماضي -> "past", الحرف -> "preposition", المضارع -> "present", الأمر -> "imperative", المصدر -> "masdar", اسم الفاعل -> "activeParticiple", اسم المفعول -> "passiveParticiple", and the English meaning column -> meaning.',
-    '- Expressions: التعبير -> "arabic" (a phrases row), المعنى -> meaning, الجملة (example sentence) -> "note".',
+    '- Expressions: التعبير -> "arabic" (a phrases row), المعنى -> meaning, الجملة (example sentence) -> note. Its three columns run right to left: التعبير farthest right, the English المعنى in the middle, الجملة farthest left. The row\'s English is the divider, so Arabic to the RIGHT of it is the expression and Arabic to the LEFT of it is the example sentence. The sentence normally quotes the expression inside a longer clause, which is exactly why it must never become "arabic": the card asks the expression alone. A row whose Arabic all sits right of the English has no sentence, so note is null. If a row carries no English, split it at the التعبير and الجملة header x values instead.',
     'Rules:',
     '- Copy Arabic EXACTLY as printed, preserving every haraka. Never normalize.',
     '- Blank cells and lone dashes are null. Rows whose cells are all empty do not exist: the book leaves many tables blank for handwriting, skip them entirely.',
