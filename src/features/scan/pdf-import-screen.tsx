@@ -28,7 +28,7 @@ import { PdfRangeStep } from '@/features/scan/pdf-range-step';
 import { ScanScreenHeader } from '@/features/scan/scan-screen-header';
 import { usePdfImportRunner } from '@/features/scan/use-pdf-import-runner';
 import { useTheme } from '@/hooks/use-theme';
-import { existingBookFile, keepBookFile } from '@/lib/book-file';
+import { dropOtherBookFiles, existingBookFile, keepBookFile } from '@/lib/book-file';
 import { extractPdfPages, isPdfPreviewAvailable } from '@/lib/pdf-preview';
 import { createPdfImport, uploadPdf } from '@/lib/queries';
 import { useBookFile } from '@/lib/stores';
@@ -226,26 +226,28 @@ export function PdfImportScreen() {
       range: ImportPageRange;
       totalPages: number | null;
     }) => {
-      if (book.kind === 'uploaded') {
-        return createPdfImport(book.storagePath, range, totalPages, 0);
-      }
       // A whole curriculum is far past what storage accepts, and the importer
       // only reads the chosen lesson, so only those pages are cut out and sent.
       // The upload then starts at its own page 1, and page_offset is what puts
-      // the book's numbering back on the progress screen.
-      const sliceable = range.toPage !== null && isPdfPreviewAvailable();
-      if (!sliceable) {
+      // the book's numbering back on the progress screen. That also means an
+      // earlier upload only holds its own lesson: importing more pages must cut
+      // a fresh slice from the device copy, not reuse the uploaded one.
+      if (book.localUri === null || range.toPage === null || !isPdfPreviewAvailable()) {
+        if (book.kind === 'uploaded') {
+          return createPdfImport(book.storagePath, range, totalPages, 0);
+        }
         setUploadFraction(0);
         const wholePath = await uploadPdf(book.localUri, setUploadFraction);
         bookFile.rememberBook(wholePath, book.localUri);
+        dropOtherBookFiles(book.localUri);
         return createPdfImport(wholePath, range, totalPages, 0);
       }
-      const lastPage = range.toPage ?? range.fromPage;
-      const slice = await extractPdfPages(book.localUri, range.fromPage, lastPage);
+      const slice = await extractPdfPages(book.localUri, range.fromPage, range.toPage);
       setUploadFraction(0);
       const path = await uploadPdf(slice, setUploadFraction);
       bookFile.rememberBook(path, book.localUri);
-      const pageCount = lastPage - range.fromPage + 1;
+      dropOtherBookFiles(book.localUri);
+      const pageCount = range.toPage - range.fromPage + 1;
       return createPdfImport(
         path,
         { fromPage: 1, toPage: pageCount },
@@ -281,7 +283,9 @@ export function PdfImportScreen() {
           knownTotalPages={sameBook ? (record?.totalPages ?? null) : null}
           // Importing the next lesson normally carries on from where the last
           // one stopped, so the browser opens there instead of at page one.
-          startAtPage={sameBook ? (record?.nextPage ?? 1) : 1}
+          // nextPage counts inside the uploaded slice; pageOffset puts it back
+          // into the book's own numbering.
+          startAtPage={sameBook && record !== null ? record.nextPage + record.pageOffset : 1}
           sameBook={sameBook}
           busy={startMutation.isPending}
           busyLabel={uploading ? 'Uploading' : 'Starting'}
@@ -330,13 +334,21 @@ export function PdfImportScreen() {
         onPause={runner.pause}
         onImportMorePages={() => {
           startMutation.reset();
+          const localUri =
+            bookFile.storagePath === record.storagePath
+              ? existingBookFile(bookFile.localUri)
+              : null;
+          // A sliced upload only holds the last lesson, so with the device copy
+          // gone there is nothing left to read new pages from; the book has to
+          // be picked again. Whole-book uploads can still be reused as they are.
+          if (localUri === null && record.pageOffset > 0) {
+            setPickingAnother(true);
+            return;
+          }
           setPendingBook({
             kind: 'uploaded',
             storagePath: record.storagePath,
-            localUri:
-              bookFile.storagePath === record.storagePath
-                ? existingBookFile(bookFile.localUri)
-                : null,
+            localUri,
           });
         }}
         onImportAnother={() => {
