@@ -491,7 +491,7 @@ generous negative space). Call fal.ai (`FAL_KEY`; model id from `FAL_MODEL`, def
 | `src/app/(tabs)/scans.tsx`     | Scan history list (kind, pages, status badge, date) + New scan button. Tap: parsed -> review, failed -> error + retry parse, reviewed -> summary, uploaded/parsing -> progress.                                                                        |
 | `src/app/(tabs)/settings.tsx`  | Account (email, sign out), AI images toggle, missing-pictures count with a "Make them" action (`useMissingCardImages`), new-cards-per-session stepper, app version.                                                                                    |
 | `src/app/study/session.tsx`    | Flashcard session for the current filter (modal, full screen).                                                                                                                                                                                         |
-| `src/app/quiz/index.tsx`       | Quiz setup: question count (5/10/20), kind toggles (present on by default), start. Shows eligible-question availability.                                                                                                                               |
+| `src/app/quiz/index.tsx`       | Quiz setup: question count (5/10/20/endless), kind toggles (present on by default), start. Shows eligible-question availability.                                                                                                                       |
 | `src/app/quiz/session.tsx`     | Quiz runner + results.                                                                                                                                                                                                                                 |
 | `src/app/scan/new.tsx`         | Kind picker (three friendly cards explaining each layout), pick/take up to 8 photos grouped into right-page-then-left-page spreads (phrases: one page per group), per-spread swap, crop/remove, upload + parse with progress, then navigate to review. |
 | `src/app/scan/import-pdf.tsx`  | Book import: pick the curriculum PDF, page through the real pages to mark where the lesson starts and ends, upload with progress, then drive `import-pdf-batch` one batch at a time, pause/resume, resumable cursor. More pages reuse the upload.      |
@@ -529,6 +529,13 @@ flashcard session. The runner holds its own copy of the cards and applies each a
 so "Try again" reflects the levels this quiz just changed; the cards query is invalidated on
 exit. Setup blocks with a "study first" message while fewer than `MIN_QUIZ_QUESTIONS` cards
 in the selection have ever been studied.
+
+The endless count option (`count: 'infinite'` in `QuizConfig`, serialized as `infinite`)
+runs in laps: each `buildQuiz` call yields at most one question per studied card, so the
+runner asks for the whole eligible pool and appends a fresh lap, rebuilt from its updated
+deck, whenever the queue runs out. The header shows "Question N" plus a Finish button
+instead of "N of M" and the progress bar; Finish scores only the answered questions, so an
+unanswered current question never counts as wrong.
 
 ### Book import UX (src/features/scan)
 

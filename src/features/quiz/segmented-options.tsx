@@ -3,25 +3,34 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Fonts, Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
-export interface SegmentedOptionsProps {
-  options: readonly number[];
-  value: number;
-  onChange: (value: number) => void;
+export interface SegmentedOption<T extends string | number> {
+  value: T;
+  label: string;
 }
 
-export function SegmentedOptions({ options, value, onChange }: SegmentedOptionsProps) {
+export interface SegmentedOptionsProps<T extends string | number> {
+  options: readonly SegmentedOption<T>[];
+  value: T;
+  onChange: (value: T) => void;
+}
+
+export function SegmentedOptions<T extends string | number>({
+  options,
+  value,
+  onChange,
+}: SegmentedOptionsProps<T>) {
   const theme = useTheme();
 
   return (
     <View style={[styles.track, { backgroundColor: theme.backgroundSelected }]}>
       {options.map((option) => {
-        const selected = option === value;
+        const selected = option.value === value;
         return (
           <Pressable
-            key={option}
+            key={String(option.value)}
             accessibilityRole="button"
             accessibilityState={{ selected }}
-            onPress={() => onChange(option)}
+            onPress={() => onChange(option.value)}
             style={({ pressed }) => [
               styles.segment,
               selected && {
@@ -36,7 +45,7 @@ export function SegmentedOptions({ options, value, onChange }: SegmentedOptionsP
               style={[styles.label, { color: selected ? theme.text : theme.textSecondary }]}
               numberOfLines={1}
             >
-              {String(option)}
+              {option.label}
             </Text>
           </Pressable>
         );

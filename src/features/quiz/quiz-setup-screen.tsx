@@ -27,11 +27,14 @@ import {
   serializeQuizParams,
   startBlockedReason,
   toggleQuizKind,
+  type QuizCount,
 } from '@/features/quiz/quiz-config';
 import { SegmentedOptions } from '@/features/quiz/segmented-options';
 
 const QUIZ_SELECTION_HINT =
   "Drawn from the words you have studied, least learned first. Answers count toward each word's level.";
+
+const ENDLESS_HINT = 'Endless keeps asking until you tap Finish; words come back around as you go.';
 
 const questionTypeGroups = [
   { caption: 'Any card', options: QUIZ_KIND_OPTIONS.filter((option) => !option.verbOnly) },
@@ -40,7 +43,7 @@ const questionTypeGroups = [
 
 export function QuizSetupScreen() {
   const selectedLessonIds = useStudyFilter((state) => state.selectedLessonIds);
-  const [count, setCount] = useState(DEFAULT_QUIZ_COUNT);
+  const [count, setCount] = useState<QuizCount>(DEFAULT_QUIZ_COUNT);
   // null until the user touches the toggles; the default follows the card mix.
   const [chosenKinds, setChosenKinds] = useState<QuizKind[] | null>(null);
 
@@ -131,7 +134,7 @@ export function QuizSetupScreen() {
           </ThemedText>
           <SegmentedOptions options={QUIZ_COUNT_OPTIONS} value={count} onChange={setCount} />
           <ThemedText type="small" themeColor="textSecondary">
-            {QUIZ_SELECTION_HINT}
+            {count === 'infinite' ? ENDLESS_HINT : QUIZ_SELECTION_HINT}
           </ThemedText>
         </View>
 

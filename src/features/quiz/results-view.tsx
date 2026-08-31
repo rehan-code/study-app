@@ -114,16 +114,18 @@ export function ResultsView({ questions, answers, onTryAgain, onDone }: ResultsV
           </ThemedText>
         )}
       </View>
-      <Surface padded={false}>
-        {questions.map((question, index) => (
-          <ResultRow
-            key={`${question.cardId}-${index}`}
-            question={question}
-            answer={answers[index]}
-            first={index === 0}
-          />
-        ))}
-      </Surface>
+      {questions.length > 0 && (
+        <Surface padded={false}>
+          {questions.map((question, index) => (
+            <ResultRow
+              key={`${question.cardId}-${index}`}
+              question={question}
+              answer={answers[index]}
+              first={index === 0}
+            />
+          ))}
+        </Surface>
+      )}
       <View style={styles.actions}>
         <Button
           label="Try again"
