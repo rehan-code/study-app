@@ -27,25 +27,6 @@ const VERB_ONLY_KINDS: ReadonlySet<QuizKind> = new Set(
   QUIZ_KIND_OPTIONS.filter((option) => option.verbOnly).map((option) => option.kind),
 );
 
-/**
- * The starting question-type selection for a card mix: verb practice when verbs
- * exist, otherwise the richest type the cards support. Keeps nouns-only and
- * phrases-only collections quizzable without hunting through toggles.
- */
-export function defaultQuizKinds(cards: readonly Card[]): QuizKind[] {
-  if (cards.some((card) => card.type === 'verb')) {
-    return ['present'];
-  }
-  const hasPlural = cards.some(
-    (card) =>
-      card.type === 'vocab' && (card.fields.plural1 !== null || card.fields.plural2 !== null),
-  );
-  if (hasPlural) {
-    return ['plural', 'meaning'];
-  }
-  return ['meaning'];
-}
-
 /** Toggles a kind while keeping the canonical option order. */
 export function toggleQuizKind(kinds: readonly QuizKind[], kind: QuizKind): QuizKind[] {
   const next = kinds.includes(kind) ? kinds.filter((item) => item !== kind) : [...kinds, kind];

@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
+import { QUIZ_KINDS, type QuizKind } from '@/domain/quiz';
+
 export const DEFAULT_NEW_CARDS_PER_SESSION = 20;
 
 /** Empty selection means "all lessons". */
@@ -106,6 +108,45 @@ export const useBookFile = create<BookFileState>()(
           return currentState;
         }
         return { ...currentState, ...parsed.data };
+      },
+    },
+  ),
+);
+
+/** Meaning questions work for every card type, so they are the first-run pick. */
+export const DEFAULT_QUIZ_KINDS: readonly QuizKind[] = ['meaning'];
+
+interface QuizSetupState {
+  kinds: QuizKind[];
+  setKinds: (kinds: QuizKind[]) => void;
+}
+
+const persistedQuizSetupSchema = z.object({
+  kinds: z.array(z.enum(QUIZ_KINDS)),
+});
+
+/** The question types picked last time, restored as the next quiz's default. */
+export const useQuizSetup = create<QuizSetupState>()(
+  persist(
+    (set) => ({
+      kinds: [...DEFAULT_QUIZ_KINDS],
+      setKinds: (kinds) => {
+        set({ kinds });
+      },
+    }),
+    {
+      name: 'mufradat-quiz-setup',
+      storage: createJSONStorage(() => AsyncStorage),
+      partialize: (state) => ({ kinds: state.kinds }),
+      merge: (persistedState, currentState) => {
+        const parsed = persistedQuizSetupSchema.safeParse(persistedState);
+        if (!parsed.success) {
+          return currentState;
+        }
+        return {
+          ...currentState,
+          kinds: QUIZ_KINDS.filter((kind) => parsed.data.kinds.includes(kind)),
+        };
       },
     },
   ),

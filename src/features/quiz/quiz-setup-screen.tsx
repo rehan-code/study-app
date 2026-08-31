@@ -12,15 +12,13 @@ import { Screen } from '@/components/screen';
 import { Surface } from '@/components/surface';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
-import type { QuizKind } from '@/domain/quiz';
 import { listCards, listLessons, NO_LESSON_ID, queryKeys } from '@/lib/queries';
-import { useStudyFilter } from '@/lib/stores';
+import { useQuizSetup, useStudyFilter } from '@/lib/stores';
 
 import {
   countEligibleQuestions,
   countStudiedCards,
   DEFAULT_QUIZ_COUNT,
-  defaultQuizKinds,
   describeLessonSelection,
   QUIZ_COUNT_OPTIONS,
   QUIZ_KIND_OPTIONS,
@@ -41,8 +39,8 @@ const questionTypeGroups = [
 export function QuizSetupScreen() {
   const selectedLessonIds = useStudyFilter((state) => state.selectedLessonIds);
   const [count, setCount] = useState(DEFAULT_QUIZ_COUNT);
-  // null until the user touches the toggles; the default follows the card mix.
-  const [chosenKinds, setChosenKinds] = useState<QuizKind[] | null>(null);
+  const kinds = useQuizSetup((state) => state.kinds);
+  const setKinds = useQuizSetup((state) => state.setKinds);
 
   const cardsQuery = useQuery({
     queryKey: queryKeys.cards(selectedLessonIds),
@@ -54,10 +52,6 @@ export function QuizSetupScreen() {
   });
 
   const cards = cardsQuery.data;
-  const kinds = useMemo(
-    () => chosenKinds ?? (cards === undefined ? [] : defaultQuizKinds(cards)),
-    [chosenKinds, cards],
-  );
   const eligible = useMemo(
     () => (cards === undefined ? 0 : countEligibleQuestions(cards, kinds)),
     [cards, kinds],
@@ -150,7 +144,7 @@ export function QuizSetupScreen() {
                     key={option.kind}
                     label={option.label}
                     selected={kinds.includes(option.kind)}
-                    onPress={() => setChosenKinds(toggleQuizKind(kinds, option.kind))}
+                    onPress={() => setKinds(toggleQuizKind(kinds, option.kind))}
                   />
                 ))}
               </View>

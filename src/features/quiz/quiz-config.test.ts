@@ -7,7 +7,6 @@ import { newSrsState, type SrsState } from '@/domain/srs';
 import {
   countEligibleQuestions,
   countStudiedCards,
-  defaultQuizKinds,
   describeLessonSelection,
   parseQuizParams,
   serializeQuizParams,
@@ -202,35 +201,6 @@ describe('startBlockedReason', () => {
 
   it('returns null when enough questions are available', () => {
     expect(startBlockedReason(2, ['present'], 5, 5)).toBeNull();
-  });
-});
-
-describe('defaultQuizKinds', () => {
-  function withPlural(card: Card, plural1: string): Card {
-    if (card.type !== 'vocab') {
-      throw new Error('expected a vocab card');
-    }
-    return { ...card, fields: { ...card.fields, plural1 } };
-  }
-
-  it('prefers verb practice when any verb card exists', () => {
-    const bab = vocabCard('n-bab', 'بَاب', 'Door');
-    expect(defaultQuizKinds([bab, ittasala])).toEqual(['present']);
-  });
-
-  it('starts nouns-only collections on plural and meaning questions', () => {
-    const bab = withPlural(vocabCard('n-bab', 'بَاب', 'Door'), 'أَبْوَاب');
-    const bayt = vocabCard('n-bayt', 'بَيْت', 'House');
-    expect(defaultQuizKinds([bab, bayt])).toEqual(['plural', 'meaning']);
-  });
-
-  it('falls back to meaning when no card has a plural', () => {
-    const bab = vocabCard('n-bab', 'بَاب', 'Door');
-    expect(defaultQuizKinds([bab])).toEqual(['meaning']);
-  });
-
-  it('falls back to meaning for an empty collection', () => {
-    expect(defaultQuizKinds([])).toEqual(['meaning']);
   });
 });
 

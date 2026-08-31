@@ -1,7 +1,8 @@
 import { cardHeadline, withCardSrs, type Card } from '@/domain/cards';
 import { isNew, learnedness, reviewCard, type SrsState } from '@/domain/srs';
 
-export type QuizKind = 'present' | 'imperative' | 'masdar' | 'meaning' | 'plural';
+export const QUIZ_KINDS = ['present', 'imperative', 'masdar', 'meaning', 'plural'] as const;
+export type QuizKind = (typeof QUIZ_KINDS)[number];
 
 export interface QuizQuestion {
   cardId: string;
