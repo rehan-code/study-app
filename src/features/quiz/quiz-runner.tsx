@@ -19,7 +19,10 @@ import { QuestionView } from '@/features/quiz/question-view';
 import type { QuizConfig } from '@/features/quiz/quiz-config';
 import { ResultsView } from '@/features/quiz/results-view';
 
-const ADVANCE_DELAY_MS = 900;
+// A correct tap needs only a flash of confirmation; a miss stays long enough
+// to read the right answer.
+const ADVANCE_DELAY_CORRECT_MS = 400;
+const ADVANCE_DELAY_WRONG_MS = 900;
 
 const SAVE_ERROR_MESSAGE =
   "Couldn't save your last answer. Check your connection; it still counts in this quiz.";
@@ -66,6 +69,8 @@ export function QuizRunner({ cards, config }: QuizRunnerProps) {
     if (picked === null) {
       return;
     }
+    const delay =
+      picked === quiz[index].correctIndex ? ADVANCE_DELAY_CORRECT_MS : ADVANCE_DELAY_WRONG_MS;
     const timer = setTimeout(() => {
       setPicked(null);
       if (index + 1 < quiz.length) {
@@ -73,7 +78,7 @@ export function QuizRunner({ cards, config }: QuizRunnerProps) {
       } else {
         setShowResults(true);
       }
-    }, ADVANCE_DELAY_MS);
+    }, delay);
     return () => {
       clearTimeout(timer);
     };
