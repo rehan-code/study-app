@@ -211,6 +211,12 @@ describe('serializeQuizParams / parseQuizParams', () => {
     expect(parseQuizParams(params)).toEqual({ count: 10, kinds: ['present', 'meaning'] });
   });
 
+  it('round-trips an endless config', () => {
+    const params = serializeQuizParams({ count: 'infinite', kinds: ['meaning'] });
+    expect(params).toEqual({ count: 'infinite', kinds: 'meaning' });
+    expect(parseQuizParams(params)).toEqual({ count: 'infinite', kinds: ['meaning'] });
+  });
+
   it('accepts array-shaped route params by taking the first value', () => {
     expect(parseQuizParams({ count: ['5'], kinds: ['masdar'] })).toEqual({
       count: 5,
@@ -236,6 +242,12 @@ describe('serializeQuizParams / parseQuizParams', () => {
     expect(parseQuizParams({ count: '0', kinds: 'present' })).toBeNull();
     expect(parseQuizParams({ count: '-3', kinds: 'present' })).toBeNull();
     expect(parseQuizParams({ count: '2.5', kinds: 'present' })).toBeNull();
+  });
+
+  it('rejects count words other than the endless sentinel', () => {
+    expect(parseQuizParams({ count: 'Infinity', kinds: 'present' })).toBeNull();
+    expect(parseQuizParams({ count: 'INFINITE', kinds: 'present' })).toBeNull();
+    expect(parseQuizParams({ count: 'endless', kinds: 'present' })).toBeNull();
   });
 
   it('rejects unknown kinds', () => {

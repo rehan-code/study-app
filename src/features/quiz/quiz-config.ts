@@ -3,8 +3,20 @@ import { z } from 'zod';
 import type { Card } from '@/domain/cards';
 import { buildQuiz, mulberry32, quizPool, type QuizKind } from '@/domain/quiz';
 
-export const QUIZ_COUNT_OPTIONS: readonly number[] = [5, 10, 20];
-export const DEFAULT_QUIZ_COUNT = 10;
+export type QuizCount = number | 'infinite';
+
+export interface QuizCountOption {
+  value: QuizCount;
+  label: string;
+}
+
+export const QUIZ_COUNT_OPTIONS: readonly QuizCountOption[] = [
+  { value: 5, label: '5' },
+  { value: 10, label: '10' },
+  { value: 20, label: '20' },
+  { value: 'infinite', label: '∞' },
+];
+export const DEFAULT_QUIZ_COUNT: QuizCount = 10;
 export const MIN_QUIZ_QUESTIONS = 2;
 
 export interface QuizKindOption {
@@ -79,7 +91,7 @@ export function startBlockedReason(
 }
 
 export interface QuizConfig {
-  count: number;
+  count: QuizCount;
   kinds: QuizKind[];
 }
 
@@ -120,9 +132,15 @@ export function parseQuizParams(raw: unknown): QuizConfig | null {
   if (countRaw === null || kindsRaw === null) {
     return null;
   }
-  const count = Number(countRaw);
-  if (!Number.isInteger(count) || count < 1) {
-    return null;
+  let count: QuizCount;
+  if (countRaw === 'infinite') {
+    count = 'infinite';
+  } else {
+    const numeric = Number(countRaw);
+    if (!Number.isInteger(numeric) || numeric < 1) {
+      return null;
+    }
+    count = numeric;
   }
   const kinds: QuizKind[] = [];
   for (const part of kindsRaw.split(',')) {

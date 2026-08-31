@@ -4,6 +4,7 @@ import { router, useNavigation } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
 
+import { Button } from '@/components/button';
 import { EmptyState } from '@/components/empty-state';
 import { IconButton } from '@/components/icon-button';
 import { ProgressBar } from '@/components/progress-bar';
@@ -38,8 +39,11 @@ function goBackHome() {
 }
 
 function buildSeededQuiz(cards: Card[], config: QuizConfig): QuizQuestion[] {
+  // Endless mode runs in laps: each build yields at most one question per
+  // studied card, so the runner asks for the whole pool and rebuilds from its
+  // updated deck when the lap runs out.
   return buildQuiz(cards, {
-    count: config.count,
+    count: config.count === 'infinite' ? cards.length : config.count,
     kinds: [...config.kinds],
     rng: mulberry32(Date.now()),
   });
@@ -60,8 +64,10 @@ export function QuizRunner({ cards, config }: QuizRunnerProps) {
   const [showResults, setShowResults] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const wroteRef = useRef(false);
+  const endless = config.count === 'infinite';
 
-  // Lock, show the outcome, then move on.
+  // Lock, show the outcome, then move on. Endless mode never runs out: when
+  // the lap ends it appends a fresh lap built from the updated deck.
   useEffect(() => {
     if (picked === null) {
       return;
@@ -70,14 +76,22 @@ export function QuizRunner({ cards, config }: QuizRunnerProps) {
       setPicked(null);
       if (index + 1 < quiz.length) {
         setIndex(index + 1);
-      } else {
-        setShowResults(true);
+        return;
       }
+      if (endless) {
+        const nextLap = buildSeededQuiz(deckRef.current, config);
+        if (nextLap.length > 0) {
+          setQuiz((previous) => [...previous, ...nextLap]);
+          setIndex(index + 1);
+          return;
+        }
+      }
+      setShowResults(true);
     }, ADVANCE_DELAY_MS);
     return () => {
       clearTimeout(timer);
     };
-  }, [picked, quiz, index]);
+  }, [picked, quiz, index, endless, config]);
 
   const inProgress = quiz.length > 0 && !showResults;
 
@@ -88,7 +102,10 @@ export function QuizRunner({ cards, config }: QuizRunnerProps) {
     }
     const unsubscribe = navigation.addListener('beforeRemove', (event) => {
       event.preventDefault();
-      Alert.alert('Leave the quiz?', 'Answers so far are saved; the rest of the quiz is not.', [
+      const message = endless
+        ? 'Answers so far are saved. Finish instead to see your results.'
+        : 'Answers so far are saved; the rest of the quiz is not.';
+      Alert.alert('Leave the quiz?', message, [
         { text: 'Keep going', style: 'cancel' },
         {
           text: 'Leave',
@@ -100,7 +117,7 @@ export function QuizRunner({ cards, config }: QuizRunnerProps) {
       ]);
     });
     return unsubscribe;
-  }, [navigation, inProgress]);
+  }, [navigation, inProgress, endless]);
 
   // Levels changed here show up wherever else cards are read; refresh on exit.
   useEffect(() => {
@@ -148,6 +165,25 @@ export function QuizRunner({ cards, config }: QuizRunnerProps) {
     setShowResults(false);
   };
 
+  // Ending an endless run mid-question drops the unanswered tail from scoring.
+  const handleFinish = () => {
+    setPicked(null);
+    setShowResults(true);
+  };
+
+  if (showResults) {
+    return (
+      <Screen scroll>
+        <ResultsView
+          questions={endless ? quiz.slice(0, answers.length) : quiz}
+          answers={answers}
+          onTryAgain={handleTryAgain}
+          onDone={goBackHome}
+        />
+      </Screen>
+    );
+  }
+
   if (quiz.length === 0) {
     return (
       <Screen>
@@ -161,29 +197,20 @@ export function QuizRunner({ cards, config }: QuizRunnerProps) {
     );
   }
 
-  if (showResults) {
-    return (
-      <Screen scroll>
-        <ResultsView
-          questions={quiz}
-          answers={answers}
-          onTryAgain={handleTryAgain}
-          onDone={goBackHome}
-        />
-      </Screen>
-    );
-  }
-
   return (
     <Screen>
       <View style={styles.header}>
         <IconButton icon="xmark" accessibilityLabel="Close quiz" onPress={goBackHome} />
         <ThemedText type="smallBold" themeColor="textSecondary">
-          {`${index + 1} of ${quiz.length}`}
+          {endless ? `Question ${index + 1}` : `${index + 1} of ${quiz.length}`}
         </ThemedText>
-        <View style={styles.headerSpacer} />
+        {endless ? (
+          <Button label="Finish" variant="ghost" onPress={handleFinish} />
+        ) : (
+          <View style={styles.headerSpacer} />
+        )}
       </View>
-      <ProgressBar progress={answers.length / quiz.length} />
+      {!endless && <ProgressBar progress={answers.length / quiz.length} />}
       {saveError !== null && (
         <View style={[styles.errorBanner, { backgroundColor: theme.dangerSoft }]}>
           <ThemedText type="small" themeColor="danger" style={styles.errorText}>
