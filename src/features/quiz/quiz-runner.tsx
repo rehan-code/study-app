@@ -178,10 +178,13 @@ export function QuizRunner({ cards, config }: QuizRunnerProps) {
 
   if (showResults) {
     return (
-      <Screen scroll>
+      <Screen padded={false}>
         <ResultsView
           questions={endless ? quiz.slice(0, answers.length) : quiz}
           answers={answers}
+          onSelectCard={(cardId) => {
+            router.push(`/card/${cardId}`);
+          }}
           onTryAgain={handleTryAgain}
           onDone={goBackHome}
         />
