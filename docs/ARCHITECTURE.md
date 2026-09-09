@@ -216,6 +216,42 @@ the field so the user can tap between the suggested fix and what the page says.
 (throws ZodError on invalid; UI calls `validateDrafts` first to block save with friendly
 messages). Excluded drafts are the caller's job to filter.
 
+### src/domain/word-key.ts
+
+```ts
+export interface WordSeed {
+  type: CardType;
+  fields: CardFields;
+  meaning: string;
+}
+export function wordKey(seed: WordSeed): string | null;
+export function studiedProgressByWord(
+  cards: readonly (WordSeed & { srs: SrsState })[],
+): Map<string, SrsState>;
+export function startingSrs(
+  studied: ReadonlyMap<string, SrsState>,
+  seed: WordSeed,
+  now: Date,
+): SrsState;
+```
+
+Rules: the key is `${arabicSkeleton(headword)}|${meaning}`, where the headword is `past` for
+verbs and `arabic` otherwise (plurals, participles and prepositions vary between printings of
+one entry, so they are left out), the skeleton drops harakat, tatweel, spacing and the fonts'
+lookalike letters, and the meaning is trimmed, lowercased and whitespace-collapsed. Null when
+either half is empty. Both halves must match: two words spelled alike with different meanings
+are different words, and so are two Arabic words that share one English translation.
+
+`studiedProgressByWord` indexes what the collection already knows, skipping never-answered
+cards (they carry nothing to inherit) and keeping the copy that is furthest along per word
+(highest box, ties to the most recently answered). `startingSrs` is what an imported row
+starts at: the known word's progress, else `newSrsState`. Both import paths use it, so a word
+met again in a later lesson is not studied from scratch and does not count as new.
+
+A mirror lives at `supabase/functions/_shared/word-key.ts` over raw DB rows (`wordKey`,
+`studiedProgressByWord`, `startingProgress`) because Deno cannot import from `src/`. The
+mirror's test asserts the two sides produce identical keys; keep them in sync.
+
 ## Lib contracts
 
 ### src/lib/supabase.ts
@@ -303,7 +339,9 @@ export async function saveReviewedCards(
 `saveReviewedCards`: filter excluded drafts, `validateDrafts` (throw on problems), resolve
 lesson names to ids creating lessons as needed (case-insensitive name match against existing),
 insert cards (type, fields with note folded in, meaning, lesson_id, scan_id), mark the scan
-`reviewed`, return the inserted card ids. After a successful save the review editor kicks off
+`reviewed`, return the inserted card ids. SRS columns are written explicitly from
+`startingSrs` (src/domain/word-key.ts) against the whole collection, so a word already
+studied under another lesson keeps its progress instead of arriving new. After a successful save the review editor kicks off
 `uploadPdf` streams the file off disk to a signed upload URL with
 `expo-file-system`'s native upload task, reporting progress. It must NEVER read the PDF
 into JS first: `fetch(uri).arrayBuffer()` base64 encodes a book sized file to cross the
@@ -424,6 +462,12 @@ prints. It is monotonic too: a proposal carrying fewer marks than the page is dr
 vague answer can never strip vowelling the book already had. A cell whose letters are
 themselves corrupt (the broken heading font leaves ASCII inside the word, about 0.5% of
 items) fails the guard and simply keeps what was printed.
+
+Before the batch's cards are written, the studied cards already in the collection are read
+once (`last_reviewed_at not null`) and indexed by `wordKey`; every inserted row carries the
+progress of the word it repeats (`startingProgress`, `_shared/word-key.ts`) and a clean slate
+otherwise. A book repeats its vocabulary across lessons, so without this a word would come
+back as new every time it is printed again.
 
 `vocalizationTargets` and `applyVocalizations` share one internal walk, so the cells that get
 asked about and the cells that get written back cannot drift out of step. The calls are

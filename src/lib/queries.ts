@@ -17,7 +17,8 @@ import {
   type ReviewDraft,
 } from '@/domain/scan-review';
 import { scanFromRow, type Scan } from '@/domain/scans';
-import type { SrsState } from '@/domain/srs';
+import { newSrsState, type SrsState } from '@/domain/srs';
+import { startingSrs, studiedProgressByWord } from '@/domain/word-key';
 import { getSupabase, makeStorageSlug } from '@/lib/supabase';
 
 export const queryKeys = {
@@ -147,16 +148,27 @@ export async function setCardLesson(id: string, lessonId: string | null): Promis
   }
 }
 
+/** SRS state as the cards table stores it. */
+function srsColumns(srs: SrsState): {
+  box: number;
+  due_at: string;
+  correct_count: number;
+  incorrect_count: number;
+  last_reviewed_at: string | null;
+} {
+  return {
+    box: srs.box,
+    due_at: srs.dueAt.toISOString(),
+    correct_count: srs.correctCount,
+    incorrect_count: srs.incorrectCount,
+    last_reviewed_at: srs.lastReviewedAt === null ? null : srs.lastReviewedAt.toISOString(),
+  };
+}
+
 export async function resetCardProgress(id: string): Promise<void> {
   const { error } = await getSupabase()
     .from('cards')
-    .update({
-      box: 0,
-      due_at: new Date().toISOString(),
-      correct_count: 0,
-      incorrect_count: 0,
-      last_reviewed_at: null,
-    })
+    .update(srsColumns(newSrsState(new Date())))
     .eq('id', id);
   if (error !== null) {
     raise('reset the card', error);
@@ -171,16 +183,7 @@ export async function deleteCard(id: string): Promise<void> {
 }
 
 export async function applyReview(cardId: string, srs: SrsState): Promise<void> {
-  const { error } = await getSupabase()
-    .from('cards')
-    .update({
-      box: srs.box,
-      due_at: srs.dueAt.toISOString(),
-      correct_count: srs.correctCount,
-      incorrect_count: srs.incorrectCount,
-      last_reviewed_at: srs.lastReviewedAt === null ? null : srs.lastReviewedAt.toISOString(),
-    })
-    .eq('id', cardId);
+  const { error } = await getSupabase().from('cards').update(srsColumns(srs)).eq('id', cardId);
   if (error !== null) {
     raise('save your answer', error);
   }
@@ -308,6 +311,10 @@ export async function saveReviewedCards(
     throw new Error(describeDraftProblem(problems[0]));
   }
   const lessonIdsByKey = await resolveLessonIds(included);
+  // A word already in the collection keeps the progress it has earned, so the
+  // same word met again in another lesson is not studied from scratch.
+  const studied = studiedProgressByWord(await listCards([]));
+  const now = new Date();
   const rows = included.map((draft) => {
     const seed = draftToCardSeed(draft);
     const lessonName = draft.lessonName?.trim();
@@ -317,6 +324,7 @@ export async function saveReviewedCards(
       meaning: seed.meaning,
       lesson_id: lessonName ? (lessonIdsByKey.get(lessonNameKey(lessonName)) ?? null) : null,
       scan_id: input.scan.id,
+      ...srsColumns(startingSrs(studied, seed, now)),
     };
   });
   // A save that failed midway can be retried: replacing this scan's cards

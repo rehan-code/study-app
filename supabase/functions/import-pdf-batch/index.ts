@@ -11,6 +11,7 @@ import {
   vocalizationTargets,
   type VocalizationTarget,
 } from '../_shared/vocalize.ts';
+import { startingProgress, studiedProgressByWord, type WordProgress } from '../_shared/word-key.ts';
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -584,7 +585,7 @@ const CARD_TYPE: Record<ScanKind, string> = {
   phrases: 'phrase',
 };
 
-interface CardInsert {
+interface CardInsert extends WordProgress {
   lesson_id: string;
   pdf_import_id: string;
   import_page: number;
@@ -593,13 +594,57 @@ interface CardInsert {
   meaning: string;
 }
 
+/** Cards worth reading for their progress; jsonb fields are trusted only as text. */
+const studiedCardsSchema = z.array(
+  z.object({
+    type: z.string(),
+    fields: z.record(z.string(), z.unknown()).transform((raw) => {
+      const fields: Record<string, string | null> = {};
+      for (const [key, value] of Object.entries(raw)) {
+        fields[key] = typeof value === 'string' ? value : null;
+      }
+      return fields;
+    }),
+    meaning: z.string(),
+    box: z.number().int().nonnegative(),
+    due_at: z.string(),
+    correct_count: z.number().int().nonnegative(),
+    incorrect_count: z.number().int().nonnegative(),
+    last_reviewed_at: z.string().nullable(),
+  }),
+);
+
+/**
+ * Rows the collection already knows, so a word met again in a later lesson
+ * carries the progress it has earned instead of arriving as a new word. Only
+ * studied cards are worth reading: an unstudied one has nothing to pass on.
+ */
+async function studiedWords(supabase: SupabaseClient): Promise<Map<string, WordProgress>> {
+  const { data, error } = await supabase
+    .from('cards')
+    .select('type, fields, meaning, box, due_at, correct_count, incorrect_count, last_reviewed_at')
+    .not('last_reviewed_at', 'is', null);
+  if (error) {
+    console.error('import-pdf-batch: studied card lookup failed', error);
+    throw new HttpError("Couldn't prepare this batch. Try resuming.", 500);
+  }
+  const rows = studiedCardsSchema.safeParse(data ?? []);
+  if (!rows.success) {
+    console.error('import-pdf-batch: studied card rows failed validation', rows.error);
+    throw new HttpError("Couldn't prepare this batch. Try resuming.", 500);
+  }
+  return studiedProgressByWord(rows.data);
+}
+
 function cardsForLesson(
   lessonId: string,
   importId: string,
   batchStartPage: number,
   lesson: ImportedLesson,
+  studied: ReadonlyMap<string, WordProgress>,
 ): CardInsert[] {
   const cards: CardInsert[] = [];
+  const nowIso = new Date().toISOString();
   const groups: { kind: ScanKind; rows: ImportedRow[] }[] = [
     { kind: 'nouns', rows: lesson.nouns },
     { kind: 'verbs', rows: lesson.verbs },
@@ -613,13 +658,17 @@ function cardsForLesson(
       }
       const note = row.note?.trim() ?? '';
       fields.note = note.length > 0 ? note : null;
+      const seed = {
+        type: CARD_TYPE[group.kind],
+        fields,
+        meaning: row.meaning?.trim() ?? '',
+      };
       cards.push({
         lesson_id: lessonId,
         pdf_import_id: importId,
         import_page: batchStartPage,
-        type: CARD_TYPE[group.kind],
-        fields,
-        meaning: row.meaning?.trim() ?? '',
+        ...seed,
+        ...startingProgress(studied, seed, nowIso),
       });
     }
   }
@@ -800,6 +849,10 @@ Deno.serve(async (req) => {
       throw new BatchConflictError();
     }
 
+    // Read before the cleanup below, so a retried batch can hand its own cards
+    // back the progress they had earned.
+    const studied = await studiedWords(supabase);
+
     // Re-running a failed batch replaces whatever it managed to write.
     const { error: cleanupError } = await supabase
       .from('cards')
@@ -822,7 +875,7 @@ Deno.serve(async (req) => {
       if (created) {
         lessonsCreated += 1;
       }
-      const cards = cardsForLesson(lessonId, importId, fromPage, lesson);
+      const cards = cardsForLesson(lessonId, importId, fromPage, lesson, studied);
       if (cards.length > 0) {
         const { error: cardsError } = await supabase.from('cards').insert(cards);
         if (cardsError) {
