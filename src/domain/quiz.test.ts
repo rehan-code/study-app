@@ -276,6 +276,27 @@ describe('buildQuiz verb-form questions', () => {
       expect(new Set(question.choices).size).toBe(question.choices.length);
     }
   });
+
+  it('never offers the form of a word that shares the prompt meaning', () => {
+    const dhahaba = verbCard({
+      id: 'v-dhahaba',
+      past: 'ذَهَبَ',
+      present: 'يَذْهَبُ',
+      meaning: 'To go',
+    });
+    const raha = verbCard({ id: 'v-raha', past: 'رَاحَ', present: 'يَرُوحُ', meaning: 'to go' });
+    for (const seed of [1, 2, 3, 17, 99]) {
+      const questions = buildQuiz([dhahaba, raha, ittasala, nazara, bahatha], {
+        count: 5,
+        kinds: ['present'],
+        rng: mulberry32(seed),
+      });
+      const forDhahaba = questions.find((question) => question.cardId === 'v-dhahaba');
+      expect(forDhahaba?.choices).not.toContain('يَرُوحُ');
+      const forRaha = questions.find((question) => question.cardId === 'v-raha');
+      expect(forRaha?.choices).not.toContain('يَذْهَبُ');
+    }
+  });
 });
 
 describe('buildQuiz meaning questions', () => {
@@ -347,6 +368,21 @@ describe('buildQuiz meaning questions', () => {
       const card = findCard([left, right, front], question);
       const duplicates = question.choices.filter((choice) => choice === card.meaning.trim());
       expect(duplicates).toHaveLength(1);
+    }
+  });
+
+  it('treats meanings that differ only by case as the same answer', () => {
+    const left = vocabCard('n-left2', 'يَسَارٌ', 'Side');
+    const right = vocabCard('n-right2', 'يَمِينٌ', 'side');
+    const front = vocabCard('n-front2', 'أَمَامَ', 'In front of');
+    const back = vocabCard('n-back2', 'وَرَاءَ', 'Behind');
+    const cards = [left, right, front, back];
+    for (const seed of [1, 2, 3, 17, 99]) {
+      const questions = buildQuiz(cards, { count: 4, kinds: ['meaning'], rng: mulberry32(seed) });
+      const forLeft = questions.find((question) => question.cardId === 'n-left2');
+      expect(forLeft?.choices).not.toContain('side');
+      const forRight = questions.find((question) => question.cardId === 'n-right2');
+      expect(forRight?.choices).not.toContain('Side');
     }
   });
 });

@@ -140,10 +140,22 @@ function correctAnswerFor(card: Card, kind: QuizKind): string | null {
   return card.fields[VERB_FIELD_BY_KIND[kind]];
 }
 
+/** English comparison form, so "Side" and "side" count as the same answer. */
+function normalizeMeaning(meaning: string): string {
+  return meaning.trim().toLowerCase();
+}
+
+/** Values that would read as the same option to the user collapse into one. */
+function choiceKey(value: string, kind: QuizKind): string {
+  return kind === 'meaning' ? normalizeMeaning(value) : value;
+}
+
 /**
  * Distractors closest to the correct answer, so options feel plausible. Form
  * kinds compare answer to answer; meaning choices are English, so those rank
- * by how confusable the source words' Arabic headlines are instead.
+ * by how confusable the source words' Arabic headlines are instead. Words
+ * sharing the prompt's English translation are skipped: their answer is just
+ * as right as the correct one, whichever form the question asks for.
  */
 function rankedDistractors(
   cards: readonly Card[],
@@ -153,25 +165,31 @@ function rankedDistractors(
   rng: () => number,
 ): string[] {
   const target = kind === 'meaning' ? cardHeadline(card) : correct;
-  const bestScoreByValue = new Map<string, number>();
+  const promptMeaning = normalizeMeaning(card.meaning);
+  const correctKey = choiceKey(correct, kind);
+  const bestByKey = new Map<string, { value: string; score: number }>();
   for (const other of cards) {
-    if (other.id === card.id) {
+    if (other.id === card.id || normalizeMeaning(other.meaning) === promptMeaning) {
       continue;
     }
     const value = correctAnswerFor(other, kind);
-    if (value === null || value === correct) {
+    if (value === null) {
+      continue;
+    }
+    const key = choiceKey(value, kind);
+    if (key === correctKey) {
       continue;
     }
     const score = similarityScore(target, kind === 'meaning' ? cardHeadline(other) : value);
-    const existing = bestScoreByValue.get(value);
-    if (existing === undefined || score < existing) {
-      bestScoreByValue.set(value, score);
+    const existing = bestByKey.get(key);
+    if (existing === undefined || score < existing.score) {
+      bestByKey.set(key, { value, score });
     }
   }
-  const ranked = shuffleWith([...bestScoreByValue.entries()], rng)
-    .sort((a, b) => a[1] - b[1])
+  const ranked = shuffleWith([...bestByKey.values()], rng)
+    .sort((a, b) => a.score - b.score)
     .slice(0, RANKED_POOL)
-    .map(([value]) => value);
+    .map((entry) => entry.value);
   return shuffleWith(ranked, rng).slice(0, PREFERRED_DISTRACTORS);
 }
 

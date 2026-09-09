@@ -151,8 +151,11 @@ Rules: for verb-form kinds, eligible cards are verbs with a non-null target fiel
 correct answer is that field; distractors are the same field from OTHER cards (unique, not
 equal to the correct answer), ranked by similarity to the correct answer (letter distance +
 wazn skeleton distance), preferring 3 distractors but allowing 1 minimum, else the card is
-skipped. For 'meaning', any card type is eligible; prompt is `cardHeadline`, choices are
-meanings. For 'plural', vocab cards with `plural1 ?? plural2`.
+skipped. A card whose English meaning matches the prompt card's (trimmed, case-insensitive)
+never supplies a distractor, for any kind: two Arabic words can share one translation, and
+that card's answer would be as right as the correct one. For 'meaning', any card type is
+eligible; prompt is `cardHeadline`, choices are meanings, deduplicated case-insensitively so
+"Side" and "side" cannot both appear. For 'plural', vocab cards with `plural1 ?? plural2`.
 
 Selection: prompts come only from `quizPool` (cards with `lastReviewedAt !== null`, i.e.
 already studied), drawn by weighted sampling without replacement where a card's weight is
