@@ -1,5 +1,5 @@
 import { SymbolView } from 'expo-symbols';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { ArabicText } from '@/components/arabic-text';
 import { Button } from '@/components/button';
@@ -16,6 +16,7 @@ const LEVELS_UPDATED_NOTE = "Every answer counted toward that word's level.";
 export interface ResultsViewProps {
   questions: readonly QuizQuestion[];
   answers: readonly number[];
+  onSelectCard: (cardId: string) => void;
   onTryAgain: () => void;
   onDone: () => void;
 }
@@ -39,10 +40,12 @@ function ResultRow({
   question,
   answer,
   first,
+  onPress,
 }: {
   question: QuizQuestion;
   answer: number | undefined;
   first: boolean;
+  onPress: () => void;
 }) {
   const theme = useTheme();
   const correct = answer === question.correctIndex;
@@ -51,10 +54,17 @@ function ResultRow({
   const correctAnswer = question.choices[question.correctIndex];
 
   return (
-    <View
-      style={[
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${question.promptArabic}, open card`}
+      onPress={onPress}
+      style={({ pressed }) => [
         styles.row,
-        { borderTopColor: theme.border, borderTopWidth: first ? 0 : StyleSheet.hairlineWidth },
+        {
+          borderTopColor: theme.border,
+          borderTopWidth: first ? 0 : StyleSheet.hairlineWidth,
+          backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
+        },
       ]}
     >
       <SymbolView
@@ -88,45 +98,66 @@ function ResultRow({
           </View>
         )}
       </View>
-    </View>
+      <SymbolView
+        name="chevron.right"
+        size={14}
+        weight="semibold"
+        tintColor={theme.textSecondary}
+        style={styles.rowChevron}
+      />
+    </Pressable>
   );
 }
 
-export function ResultsView({ questions, answers, onTryAgain, onDone }: ResultsViewProps) {
+export function ResultsView({
+  questions,
+  answers,
+  onSelectCard,
+  onTryAgain,
+  onDone,
+}: ResultsViewProps) {
+  const theme = useTheme();
   const score = scoreQuiz(questions, answers);
   const tier = scoreTier(score);
 
   return (
     <View style={styles.container}>
-      <View style={styles.scoreBlock}>
-        <ThemedText type="title" style={styles.centered}>
-          {`${score.correct} of ${score.total}`}
-        </ThemedText>
-        <ThemedText type="smallBold" style={styles.centered}>
-          {tier.headline}
-        </ThemedText>
-        <ThemedText type="small" themeColor="textSecondary" style={styles.centered}>
-          {tier.message}
-        </ThemedText>
-        {score.total > 0 && (
-          <ThemedText type="small" themeColor="textSecondary" style={styles.centered}>
-            {LEVELS_UPDATED_NOTE}
+      {/* The answer list is unbounded in endless mode, so it scrolls on its own
+          and the actions stay pinned within reach. */}
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        <View style={styles.scoreBlock}>
+          <ThemedText type="title" style={styles.centered}>
+            {`${score.correct} of ${score.total}`}
           </ThemedText>
+          <ThemedText type="smallBold" style={styles.centered}>
+            {tier.headline}
+          </ThemedText>
+          <ThemedText type="small" themeColor="textSecondary" style={styles.centered}>
+            {tier.message}
+          </ThemedText>
+          {score.total > 0 && (
+            <ThemedText type="small" themeColor="textSecondary" style={styles.centered}>
+              {LEVELS_UPDATED_NOTE}
+            </ThemedText>
+          )}
+        </View>
+        {questions.length > 0 && (
+          <Surface padded={false}>
+            {questions.map((question, index) => (
+              <ResultRow
+                key={`${question.cardId}-${index}`}
+                question={question}
+                answer={answers[index]}
+                first={index === 0}
+                onPress={() => {
+                  onSelectCard(question.cardId);
+                }}
+              />
+            ))}
+          </Surface>
         )}
-      </View>
-      {questions.length > 0 && (
-        <Surface padded={false}>
-          {questions.map((question, index) => (
-            <ResultRow
-              key={`${question.cardId}-${index}`}
-              question={question}
-              answer={answers[index]}
-              first={index === 0}
-            />
-          ))}
-        </Surface>
-      )}
-      <View style={styles.actions}>
+      </ScrollView>
+      <View style={[styles.actions, { borderTopColor: theme.border }]}>
         <Button
           label="Try again"
           onPress={onTryAgain}
@@ -142,7 +173,12 @@ export function ResultsView({ questions, answers, onTryAgain, onDone }: ResultsV
 
 const styles = StyleSheet.create({
   container: {
+    flex: 1,
+  },
+  scrollContent: {
     gap: Spacing.four,
+    paddingHorizontal: Spacing.three,
+    paddingBottom: Spacing.three,
   },
   scoreBlock: {
     gap: Spacing.one,
@@ -161,6 +197,9 @@ const styles = StyleSheet.create({
     // Centers the icon on the first Arabic line, whose tall line height starts lower.
     marginTop: 6,
   },
+  rowChevron: {
+    marginTop: 10,
+  },
   rowContent: {
     flex: 1,
     gap: Spacing.one,
@@ -176,5 +215,9 @@ const styles = StyleSheet.create({
   },
   actions: {
     gap: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.three,
+    paddingBottom: Spacing.two,
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
 });
