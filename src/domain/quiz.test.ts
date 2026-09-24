@@ -4,9 +4,11 @@ import { cardHeadline, withCardSrs, type Card } from '@/domain/cards';
 import {
   answerQuizQuestion,
   buildQuiz,
+  choicesAreArabic,
   countQuizQuestions,
   mulberry32,
   nextEndlessQuestion,
+  promptIsArabic,
   quizPool,
   QUIZ_KINDS,
   type QuizKind,
@@ -390,6 +392,106 @@ describe('buildQuiz meaning questions', () => {
   });
 });
 
+describe('buildQuiz arabic-word questions', () => {
+  it('prompts with the meaning and offers Arabic words from any card type', () => {
+    const cards = [usbu, yameen, ittasala];
+    const headlines = new Set(cards.map((card) => cardHeadline(card)));
+    const questions = buildQuiz(cards, { count: 3, kinds: ['arabic'], rng: mulberry32(4) });
+    expect(questions).toHaveLength(3);
+    for (const question of questions) {
+      const card = findCard(cards, question);
+      expect(question.kind).toBe('arabic');
+      expect(question.instruction).toBe('Pick the Arabic word');
+      expect(question.promptMeaning).toBe(card.meaning);
+      expect(question.promptArabic).toBe(cardHeadline(card));
+      expect(question.choices[question.correctIndex]).toBe(cardHeadline(card));
+      expect(question.choices).toHaveLength(3);
+      expect(new Set(question.choices).size).toBe(question.choices.length);
+      for (const choice of question.choices) {
+        expect(headlines.has(choice)).toBe(true);
+      }
+    }
+  });
+
+  it('keeps the preposition on verb choices', () => {
+    const questions = buildQuiz([ittasala, nazara], {
+      count: 2,
+      kinds: ['arabic'],
+      rng: mulberry32(3),
+    });
+    expect(questions).toHaveLength(2);
+    for (const question of questions) {
+      expect([...question.choices].sort()).toEqual(['اِتَّصَلَ بـ', 'نَظَرَ إِلَى'].sort());
+    }
+  });
+
+  it('skips cards with a blank meaning, since there is nothing to ask', () => {
+    const blank = vocabCard('n-blank', 'كَذَلِكَ', '   ');
+    const questions = buildQuiz([blank, usbu, yameen], {
+      count: 5,
+      kinds: ['arabic'],
+      rng: mulberry32(6),
+    });
+    expect(questions).toHaveLength(2);
+    expect(questions.some((question) => question.cardId === 'n-blank')).toBe(false);
+  });
+
+  it('never offers the Arabic of a word that shares the prompt meaning', () => {
+    const left = vocabCard('n-left3', 'يَسَارٌ', 'Side');
+    const right = vocabCard('n-right3', 'يَمِينٌ', 'side');
+    const front = vocabCard('n-front3', 'أَمَامَ', 'In front of');
+    const back = vocabCard('n-back3', 'وَرَاءَ', 'Behind');
+    const cards = [left, right, front, back];
+    for (const seed of [1, 2, 3, 17, 99]) {
+      const questions = buildQuiz(cards, { count: 4, kinds: ['arabic'], rng: mulberry32(seed) });
+      const forLeft = questions.find((question) => question.cardId === 'n-left3');
+      expect(forLeft?.choices).toContain('يَسَارٌ');
+      expect(forLeft?.choices).not.toContain('يَمِينٌ');
+      const forRight = questions.find((question) => question.cardId === 'n-right3');
+      expect(forRight?.choices).toContain('يَمِينٌ');
+      expect(forRight?.choices).not.toContain('يَسَارٌ');
+    }
+  });
+
+  it('prefers Arabic words that look like the correct one', () => {
+    const bayt = vocabCard('n-bayt3', 'بَيْت', 'House');
+    const lookalikes = [
+      vocabCard('n-bint3', 'بِنْت', 'Girl'),
+      vocabCard('n-zayt3', 'زَيْت', 'Oil'),
+      vocabCard('n-sawt3', 'صَوْت', 'Voice'),
+      vocabCard('n-waqt3', 'وَقْت', 'Time'),
+      vocabCard('n-sayyara3', 'سَيَّارَة', 'Car'),
+    ];
+    const unrelated = [
+      vocabCard('n-madrasa3', 'مَدْرَسَة', 'School'),
+      vocabCard('n-mustashfa3', 'مُسْتَشْفَى', 'Hospital'),
+    ];
+    const cards = [bayt, ...lookalikes, ...unrelated];
+    for (const seed of [1, 2, 3, 17, 99]) {
+      const questions = buildQuiz(cards, { count: 8, kinds: ['arabic'], rng: mulberry32(seed) });
+      const forBayt = questions.find((question) => question.cardId === 'n-bayt3');
+      expect(forBayt).toBeDefined();
+      expect(forBayt?.choices).toContain('بَيْت');
+      expect(forBayt?.choices).not.toContain('مَدْرَسَة');
+      expect(forBayt?.choices).not.toContain('مُسْتَشْفَى');
+    }
+  });
+});
+
+describe('question languages', () => {
+  it('answers in English only for meaning questions', () => {
+    for (const kind of QUIZ_KINDS) {
+      expect(choicesAreArabic(kind)).toBe(kind !== 'meaning');
+    }
+  });
+
+  it('prompts in English only for arabic-word questions', () => {
+    for (const kind of QUIZ_KINDS) {
+      expect(promptIsArabic(kind)).toBe(kind !== 'arabic');
+    }
+  });
+});
+
 describe('buildQuiz plural questions', () => {
   function pluralCard(
     id: string,
@@ -508,7 +610,7 @@ describe('buildQuiz composition', () => {
     const cards = [...fullVerbs, ihtaja, usbu, yameen];
     const questions = buildQuiz(cards, {
       count: 20,
-      kinds: ['present', 'imperative', 'masdar', 'meaning'],
+      kinds: ['present', 'imperative', 'masdar', 'meaning', 'arabic'],
       rng: mulberry32(21),
     });
     expect(questions.length).toBeGreaterThan(0);

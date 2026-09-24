@@ -123,16 +123,18 @@ entries; `sessionSummary` counts a card as `notYet` if ANY of its entries missed
 ### src/domain/quiz.ts
 
 ```ts
-export type QuizKind = 'present' | 'imperative' | 'masdar' | 'meaning' | 'plural';
+export type QuizKind = 'present' | 'imperative' | 'masdar' | 'meaning' | 'arabic' | 'plural';
 export interface QuizQuestion {
   cardId: string;
   kind: QuizKind;
   promptArabic: string; // e.g. the past-tense verb for 'present' questions
-  promptMeaning: string; // English gloss shown as a hint
+  promptMeaning: string; // English gloss: a hint on form kinds, the prompt for 'arabic'
   instruction: string; // e.g. "Pick the present tense (المضارع)"
   choices: string[]; // 2 to 4 unique options
   correctIndex: number;
 }
+export function choicesAreArabic(kind: QuizKind): boolean; // false only for 'meaning'
+export function promptIsArabic(kind: QuizKind): boolean; // false only for 'arabic'
 export function mulberry32(seed: number): () => number;
 export function quizPool(cards: readonly Card[]): Card[];
 export function buildQuiz(
@@ -162,7 +164,10 @@ skipped. A card whose English meaning matches the prompt card's (trimmed, case-i
 never supplies a distractor, for any kind: two Arabic words can share one translation, and
 that card's answer would be as right as the correct one. For 'meaning', any card type is
 eligible; prompt is `cardHeadline`, choices are meanings, deduplicated case-insensitively so
-"Side" and "side" cannot both appear. For 'plural', vocab cards with `plural1 ?? plural2`.
+"Side" and "side" cannot both appear. 'arabic' is the reverse: any card with a non-blank
+meaning is eligible, the prompt is the meaning, and the choices are other cards'
+`cardHeadline`s ranked by similarity to the correct one. For 'plural', vocab cards with
+`plural1 ?? plural2`.
 
 Selection: prompts come only from `quizPool` (cards with `lastReviewedAt !== null`, i.e.
 already studied), drawn by weighted sampling without replacement where a card's weight is
@@ -582,6 +587,8 @@ undo-safe ordering); progress bar on top; completion screen with summary counts 
 ### Quiz UX (src/features/quiz)
 
 One question at a time: instruction, prompt Arabic large, four (or fewer) choice buttons.
+Arabic-word questions flip the languages: the English meaning is the large prompt and the
+choices render as Arabic; the results list shows the English prompt for those rows.
 Tap: locks choices, correct turns success, wrong pick turns danger while correct pulses,
 haptic, auto-advance after ~900ms. Results: score headline, per-question list (prompt,
 your answer, correct answer), Try again (new seed) and Done.
