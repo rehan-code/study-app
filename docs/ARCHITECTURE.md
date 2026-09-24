@@ -524,28 +524,52 @@ output with the contract schema, persist `parsed_rows` + status `parsed`, return
 
 ### generate-card-image
 
-Request `{ cardId: string }`. Load card (404 if missing). Build prompt from the card's
-meaning: a charming minimalist flat vector illustration (one central subject, rounded
-geometric shapes, warm terracotta/amber/sage/cream palette, plain light background,
-generous negative space). Call fal.ai (`FAL_KEY`; model id from `FAL_MODEL`, default
-`fal-ai/flux/schnell`, endpoint `https://fal.run/{model}` with `{ prompt, image_size:
-'landscape_4_3', num_images: 1 }`), download the resulting image, upload to
-`card-images/${userId}/${cardId}.jpg` with upsert, update `ai_image_path`, return `{ path }`.
+Request `{ cardId: string }`. Load card (404 if missing). Build the picture in two steps:
 
-**Card images must never contain writing**, and two mechanisms keep them clean:
+- _Scene._ Claude (`ANTHROPIC_API_KEY`; model from `IMAGE_SCENE_MODEL`, default
+  `claude-haiku-4-5-20251001`) gets the card's Arabic word, kind (verb, noun or adjective,
+  phrase) and meaning, and returns one concrete moment to draw through a forced
+  `describe_scene` tool call returning `{ scene }`. Verbs become a man or boy caught
+  mid-action, abstract words the everyday situation that shows them, phrases the social
+  moment where they are said. Without this step the image model got a bare gloss ("To
+  complete") and drew abstract blobs for most verbs. A scene writer that cannot run logs and
+  falls back to a plain scene built from the meaning, so the card still gets a picture.
+- _Style._ The scene is wrapped in a faceless flat vector style: characters with blank,
+  featureless faces whose feelings come through posture and gesture, modest loose clothing,
+  a few props, a hint of setting.
+- _Colour._ Each image draws a palette (three lead colours plus a pale background) at random
+  from a fixed list. The scene writer names the colours of clothes and props from it, while
+  anything with a natural colour keeps it (a yellow banana), and the style repeats it. A
+  single fixed palette made every card look alike, and a model left to pick colours freely
+  settles on the same few, so the variety comes from the random draw.
 
-- _Prompt._ FLUX has no negative prompt, and its text encoder reads "no text, no letters,
-  no captions" as a request for exactly those, so the prompt never names writing at all.
-  It states the wanted result positively instead (smooth empty surfaces, an idea carried by
-  shape and colour alone) and keeps the meaning unquoted so it reads as scene, not caption.
-- _Check and retry._ Each generated image goes to Claude (`ANTHROPIC_API_KEY`; model from
-  `IMAGE_CHECK_MODEL`, default `claude-haiku-4-5-20251001`) with a forced `report_writing_in_image`
-  tool call returning `{ hasWriting, note }`; garbled letter-like squiggles count as writing
-  and ties resolve to "yes". An image with writing is discarded and regenerated, up to three
-  attempts whose prompts step from scene to symbol to bare pictogram (the surfaces that
-  invite lettering vanish as the subject abstracts). All three dirty -> 502, leaving the card
-  imageless rather than storing writing. fal.ai errors propagate at once; only writing retries.
-  A check that cannot run (no key, upstream error) logs and keeps the image.
+Call fal.ai (`FAL_KEY`; model id from `FAL_MODEL`, default `fal-ai/flux/schnell`, endpoint
+`https://fal.run/{model}` with `{ prompt, image_size: 'landscape_4_3', num_images: 1 }`),
+download the resulting image, upload to `card-images/${userId}/${cardId}.jpg` with upsert,
+update `ai_image_path`, return `{ path }`.
+
+**Card image rules.** A picture must never contain writing, every face must be blank, and
+characters are men and boys unless the meaning needs a woman or girl, who then wears a hijab
+covering all of her hair. Two mechanisms enforce this:
+
+- _Prompt._ FLUX has no negative prompt and draws whatever it reads: "no text, no letters"
+  comes back as lettering, and a style line mentioning women adds women. So the image prompt
+  names none of these. The scene writer names every character explicitly as a man or boy
+  (a woman only when essential, already described in a hijab and abaya), never describes
+  facial expressions, leaves out lettered objects (books, signs, screens, packaging, clocks,
+  speech bubbles) and never mentions text, even to rule it out. The style asks positively
+  for featureless faces and plain smooth surfaces. The meaning itself never reaches the image
+  prompt.
+- _Check and retry._ Each generated image goes to Claude (model from `IMAGE_CHECK_MODEL`,
+  default `claude-haiku-4-5-20251001`) with a forced `report_image_problems` tool call
+  returning `{ hasWriting, hasFacialFeatures, hasUncoveredFemale, note }`. Garbled
+  letter-like squiggles count as writing, dot eyes and blush count as facial features, and
+  ties resolve to "breaks the rule". A failing image is discarded and regenerated, up to four
+  attempts. Each retry asks for a fresh scene and passes along the checker's notes, so the
+  next scene drops the lettered object or swaps a non-essential woman for a man. All four
+  failing -> 502, leaving the card imageless rather than storing a picture that breaks a
+  rule. fal.ai errors propagate at once; only a broken rule retries. A check that cannot run
+  (no key, upstream error) logs and keeps the image.
 
 ## Screen map
 
@@ -658,9 +682,9 @@ source that still have none, including scans whose generation failed.
 
 - App (.env, gitignored): `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`.
 - Edge functions (supabase secrets, never in the app): `ANTHROPIC_API_KEY`,
-  `ANTHROPIC_MODEL` (optional), `IMAGE_CHECK_MODEL` (optional), `FAL_KEY`, `FAL_MODEL`
-  (optional). `ANTHROPIC_API_KEY` is used by `parse-scan`, `import-pdf-batch`, and the
-  card-image writing check.
+  `ANTHROPIC_MODEL` (optional), `IMAGE_SCENE_MODEL` (optional), `IMAGE_CHECK_MODEL`
+  (optional), `FAL_KEY`, `FAL_MODEL` (optional). `ANTHROPIC_API_KEY` is used by
+  `parse-scan`, `import-pdf-batch`, and the card-image scene writer and image check.
 - Missing app env must never crash the app: the root layout routes to the setup screen.
 
 ## Definition of done
