@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import type { Card } from '@/domain/cards';
-import { buildQuiz, mulberry32, quizPool, type QuizKind } from '@/domain/quiz';
+import { countQuizQuestions, quizPool, type QuizKind } from '@/domain/quiz';
 
 export type QuizCount = number | 'infinite';
 
@@ -45,19 +45,9 @@ export function toggleQuizKind(kinds: readonly QuizKind[], kind: QuizKind): Quiz
   return KIND_ORDER.filter((item) => next.includes(item));
 }
 
-/** Fixed seed so the availability count stays stable across renders. */
-const ELIGIBLE_COUNT_SEED = 1;
-
-/** Dry-runs buildQuiz uncapped; it yields at most one question per studied card. */
+/** Questions an uncapped quiz could ask: at most one per studied card. */
 export function countEligibleQuestions(cards: readonly Card[], kinds: readonly QuizKind[]): number {
-  if (cards.length === 0 || kinds.length === 0) {
-    return 0;
-  }
-  return buildQuiz([...cards], {
-    count: cards.length,
-    kinds: [...kinds],
-    rng: mulberry32(ELIGIBLE_COUNT_SEED),
-  }).length;
+  return countQuizQuestions(cards, kinds);
 }
 
 /** Words the quiz can draw on: those studied at least once. */

@@ -12,7 +12,13 @@ import { Screen } from '@/components/screen';
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
 import type { Card } from '@/domain/cards';
-import { answerQuizQuestion, buildQuiz, mulberry32, type QuizQuestion } from '@/domain/quiz';
+import {
+  answerQuizQuestion,
+  buildQuiz,
+  mulberry32,
+  nextEndlessQuestion,
+  type QuizQuestion,
+} from '@/domain/quiz';
 import { useTheme } from '@/hooks/use-theme';
 import { applyReview, queryKeys } from '@/lib/queries';
 
@@ -41,15 +47,25 @@ function goBackHome() {
   }
 }
 
-function buildSeededQuiz(cards: Card[], config: QuizConfig): QuizQuestion[] {
-  // Endless mode runs in laps: each build yields at most one question per
-  // studied card, so the runner asks for the whole pool and rebuilds from its
-  // updated deck when the lap runs out.
-  return buildQuiz(cards, {
-    count: config.count === 'infinite' ? cards.length : config.count,
-    kinds: [...config.kinds],
-    rng: mulberry32(Date.now()),
-  });
+interface QuizStart {
+  questions: QuizQuestion[];
+  lap: string[];
+}
+
+// Endless mode starts with a single question and builds each next one as it
+// is needed; `lap` is what remains of the current pass over the deck.
+function startQuiz(cards: Card[], config: QuizConfig): QuizStart {
+  const rng = mulberry32(Date.now());
+  if (config.count === 'infinite') {
+    const first = nextEndlessQuestion(cards, [], config.kinds, rng);
+    return first === null
+      ? { questions: [], lap: [] }
+      : { questions: [first.question], lap: first.lap };
+  }
+  return {
+    questions: buildQuiz(cards, { count: config.count, kinds: [...config.kinds], rng }),
+    lap: [],
+  };
 }
 
 export function QuizRunner({ cards, config }: QuizRunnerProps) {
@@ -60,7 +76,9 @@ export function QuizRunner({ cards, config }: QuizRunnerProps) {
   // "Try again" then reflects what this quiz just taught, and refetches of the
   // cards query never reshuffle a quiz mid-run.
   const deckRef = useRef<Card[]>(cards);
-  const [quiz, setQuiz] = useState<QuizQuestion[]>(() => buildSeededQuiz(cards, config));
+  const [start] = useState(() => startQuiz(cards, config));
+  const lapRef = useRef<string[]>(start.lap);
+  const [quiz, setQuiz] = useState<QuizQuestion[]>(start.questions);
   const [index, setIndex] = useState(0);
   const [picked, setPicked] = useState<number | null>(null);
   const [answers, setAnswers] = useState<number[]>([]);
@@ -69,8 +87,9 @@ export function QuizRunner({ cards, config }: QuizRunnerProps) {
   const wroteRef = useRef(false);
   const endless = config.count === 'infinite';
 
-  // Lock, show the outcome, then move on. Endless mode never runs out: when
-  // the lap ends it appends a fresh lap built from the updated deck.
+  // Lock, show the outcome, then move on. Endless mode never runs out: it
+  // appends the next question, drawing a fresh lap from the updated deck when
+  // the current one is used up.
   useEffect(() => {
     if (picked === null) {
       return;
@@ -84,9 +103,15 @@ export function QuizRunner({ cards, config }: QuizRunnerProps) {
         return;
       }
       if (endless) {
-        const nextLap = buildSeededQuiz(deckRef.current, config);
-        if (nextLap.length > 0) {
-          setQuiz((previous) => [...previous, ...nextLap]);
+        const next = nextEndlessQuestion(
+          deckRef.current,
+          lapRef.current,
+          config.kinds,
+          mulberry32(Date.now()),
+        );
+        if (next !== null) {
+          lapRef.current = next.lap;
+          setQuiz((previous) => [...previous, next.question]);
           setIndex(index + 1);
           return;
         }
@@ -163,7 +188,9 @@ export function QuizRunner({ cards, config }: QuizRunnerProps) {
   };
 
   const handleTryAgain = () => {
-    setQuiz(buildSeededQuiz(deckRef.current, config));
+    const next = startQuiz(deckRef.current, config);
+    lapRef.current = next.lap;
+    setQuiz(next.questions);
     setIndex(0);
     setPicked(null);
     setAnswers([]);

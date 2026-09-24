@@ -4,8 +4,11 @@ import { cardHeadline, withCardSrs, type Card } from '@/domain/cards';
 import {
   answerQuizQuestion,
   buildQuiz,
+  countQuizQuestions,
   mulberry32,
+  nextEndlessQuestion,
   quizPool,
+  QUIZ_KINDS,
   type QuizKind,
   type QuizQuestion,
 } from '@/domain/quiz';
@@ -688,5 +691,139 @@ describe('buildQuiz determinism', () => {
     const first = buildQuiz(cards, { count: 6, kinds, rng: mulberry32(1) });
     const second = buildQuiz(cards, { count: 6, kinds, rng: mulberry32(99) });
     expect(first).not.toEqual(second);
+  });
+});
+
+describe('countQuizQuestions', () => {
+  const fresh = verbCard({
+    id: 'v-fresh',
+    past: 'سَأَلَ',
+    present: 'يَسْأَلُ',
+    meaning: 'To ask',
+    srs: newSrsState(NOW),
+  });
+  const raha = verbCard({ id: 'v-raha', past: 'رَاحَ', present: 'يَرُوحُ', meaning: 'to call' });
+  const blank = vocabCard('n-blank', 'كَذَلِكَ', '   ');
+  const withPlural = (card: Card, plural1: string): Card =>
+    card.type === 'vocab' ? { ...card, fields: { ...card.fields, plural1 } } : card;
+  const decks: Card[][] = [
+    [],
+    [ittasala],
+    fullVerbs,
+    [...fullVerbs, ihtaja, tuwuffiya, usbu, yameen],
+    [fresh, raha, blank, ittasala, nazara, tuwuffiya, usbu],
+    [withPlural(usbu, 'أَسَابِيع'), withPlural(yameen, 'أَيْمَان'), ittasala],
+  ];
+
+  it('matches the length of an uncapped build for every deck and kind mix', () => {
+    for (const cards of decks) {
+      for (let mask = 1; mask < 1 << QUIZ_KINDS.length; mask += 1) {
+        const kinds = QUIZ_KINDS.filter((_, bit) => (mask & (1 << bit)) !== 0);
+        const built = buildQuiz(cards, { count: cards.length, kinds, rng: mulberry32(mask) });
+        expect(countQuizQuestions(cards, kinds)).toBe(built.length);
+      }
+    }
+  });
+
+  it('returns 0 with no kinds', () => {
+    expect(countQuizQuestions(fullVerbs, [])).toBe(0);
+  });
+});
+
+describe('nextEndlessQuestion', () => {
+  const deck = [...fullVerbs, ihtaja, tuwuffiya, usbu, yameen];
+  const kinds: QuizKind[] = ['present', 'meaning'];
+
+  function askInARow(cards: Card[], total: number): string[] {
+    const asked: string[] = [];
+    let lap: string[] = [];
+    for (let turn = 0; turn < total; turn += 1) {
+      const step = nextEndlessQuestion(cards, lap, kinds, mulberry32(turn + 1));
+      if (step === null) {
+        throw new Error('ran out of questions');
+      }
+      asked.push(step.question.cardId);
+      lap = step.lap;
+    }
+    return asked;
+  }
+
+  it('asks every askable card once per lap, then starts another', () => {
+    const lapSize = countQuizQuestions(deck, kinds);
+    const asked = askInARow(deck, lapSize * 3);
+    for (let lap = 0; lap < 3; lap += 1) {
+      const ids = asked.slice(lap * lapSize, (lap + 1) * lapSize);
+      expect(new Set(ids).size).toBe(lapSize);
+    }
+  });
+
+  it('continues the lap it is handed', () => {
+    const step = nextEndlessQuestion(deck, ['v-nazara', 'v-bahatha'], kinds, mulberry32(1));
+    expect(step?.question.cardId).toBe('v-nazara');
+    expect(step?.lap).toEqual(['v-bahatha']);
+  });
+
+  it('skips lap entries it cannot ask about', () => {
+    const lap = ['v-gone', 'v-tuwuffiya', 'v-bahatha', 'v-nazara'];
+    const step = nextEndlessQuestion(deck, lap, ['imperative'], mulberry32(2));
+    expect(step?.question.cardId).toBe('v-bahatha');
+    expect(step?.lap).toEqual(['v-nazara']);
+  });
+
+  it('draws a fresh lap when the one it is handed has nothing left to ask', () => {
+    const step = nextEndlessQuestion(deck, ['v-gone'], kinds, mulberry32(3));
+    expect(step).not.toBeNull();
+    expect(step?.lap).toHaveLength(countQuizQuestions(deck, kinds) - 1);
+  });
+
+  it('orders each new lap least learned first, by the levels it is handed', () => {
+    const shaky = verbCard({
+      id: 'v-shaky',
+      past: 'رَجَعَ',
+      present: 'يَرْجِعُ',
+      meaning: 'To return',
+      srs: studiedSrs(0, 4),
+    });
+    const middling = verbCard({
+      id: 'v-middling',
+      past: 'كَتَبَ',
+      present: 'يَكْتُبُ',
+      meaning: 'To write',
+      srs: studiedSrs(3, 1),
+    });
+    const mastered = verbCard({
+      id: 'v-mastered',
+      past: 'قَرَأَ',
+      present: 'يَقْرَأُ',
+      meaning: 'To read',
+      srs: studiedSrs(MAX_BOX),
+    });
+    const flipped = [withCardSrs(shaky, mastered.srs), middling, withCardSrs(mastered, shaky.srs)];
+    for (const seed of [1, 2, 3, 17, 99]) {
+      const first = nextEndlessQuestion(
+        [mastered, middling, shaky],
+        [],
+        ['present'],
+        mulberry32(seed),
+      );
+      expect([first?.question.cardId, ...(first?.lap ?? [])]).toEqual([
+        'v-shaky',
+        'v-middling',
+        'v-mastered',
+      ]);
+      const next = nextEndlessQuestion(flipped, [], ['present'], mulberry32(seed));
+      expect([next?.question.cardId, ...(next?.lap ?? [])]).toEqual([
+        'v-mastered',
+        'v-middling',
+        'v-shaky',
+      ]);
+    }
+  });
+
+  it('returns null when no studied card can be asked about', () => {
+    expect(nextEndlessQuestion([ittasala], [], ['present'], mulberry32(1))).toBeNull();
+    expect(nextEndlessQuestion(deck, [], [], mulberry32(1))).toBeNull();
+    const unstudied = deck.map((card) => withCardSrs(card, newSrsState(NOW)));
+    expect(nextEndlessQuestion(unstudied, [], kinds, mulberry32(1))).toBeNull();
   });
 });

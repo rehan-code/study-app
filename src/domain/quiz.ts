@@ -60,29 +60,66 @@ function patternSkeleton(normalized: string): string {
 
 /**
  * Optimal string alignment distance: Levenshtein plus adjacent transpositions
- * counted as one edit, so shapes like افواف and اوفاف stay close.
+ * counted as one edit, so shapes like افواف and اوفاف stay close. This is the
+ * innermost loop of quiz building, run for every candidate a question weighs,
+ * so it keeps only the three rows the recurrence reads and skips Math.min.
  */
 function editDistance(a: string, b: string): number {
   if (a === b) {
     return 0;
   }
-  const rows: number[][] = [Array.from({ length: b.length + 1 }, (_, j) => j)];
+  const width = b.length + 1;
+  let twoBack = new Array<number>(width).fill(0);
+  let previous = Array.from({ length: width }, (_, j) => j);
+  let current = new Array<number>(width).fill(0);
   for (let i = 1; i <= a.length; i += 1) {
-    const current = [i];
-    for (let j = 1; j <= b.length; j += 1) {
-      let best = Math.min(
-        rows[i - 1][j] + 1,
-        current[j - 1] + 1,
-        rows[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
-      );
-      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
-        best = Math.min(best, rows[i - 2][j - 2] + 1);
+    current[0] = i;
+    const letter = a.charCodeAt(i - 1);
+    const letterBefore = i > 1 ? a.charCodeAt(i - 2) : -1;
+    for (let j = 1; j < width; j += 1) {
+      const other = b.charCodeAt(j - 1);
+      let best = previous[j - 1] + (letter === other ? 0 : 1);
+      if (previous[j] + 1 < best) {
+        best = previous[j] + 1;
       }
-      current.push(best);
+      if (current[j - 1] + 1 < best) {
+        best = current[j - 1] + 1;
+      }
+      if (
+        j > 1 &&
+        letterBefore === other &&
+        letter === b.charCodeAt(j - 2) &&
+        twoBack[j - 2] + 1 < best
+      ) {
+        best = twoBack[j - 2] + 1;
+      }
+      current[j] = best;
     }
-    rows.push(current);
+    const spare = twoBack;
+    twoBack = previous;
+    previous = current;
+    current = spare;
   }
-  return rows[a.length][b.length];
+  return previous[b.length];
+}
+
+/** The two forms similarity compares, derived once per text instead of once per pair. */
+interface ArabicShape {
+  letters: string;
+  pattern: string;
+}
+
+type ShapeCache = Map<string, ArabicShape>;
+
+function shapeOf(shapes: ShapeCache, text: string): ArabicShape {
+  const cached = shapes.get(text);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const letters = normalizeArabic(text);
+  const shape = { letters, pattern: patternSkeleton(letters) };
+  shapes.set(text, shape);
+  return shape;
 }
 
 /**
@@ -90,13 +127,8 @@ function editDistance(a: string, b: string): number {
  * distance pulls words on the same wazn together so a plural question about
  * بَاب prefers other أَفْعَال plurals over فُعُول ones.
  */
-function similarityScore(a: string, b: string): number {
-  const normalA = normalizeArabic(a);
-  const normalB = normalizeArabic(b);
-  return (
-    editDistance(normalA, normalB) +
-    editDistance(patternSkeleton(normalA), patternSkeleton(normalB))
-  );
+function similarityScore(a: ArabicShape, b: ArabicShape): number {
+  return editDistance(a.letters, b.letters) + editDistance(a.pattern, b.pattern);
 }
 
 /** Small deterministic PRNG; the standard mulberry32 mixing constants. */
@@ -150,65 +182,117 @@ function choiceKey(value: string, kind: QuizKind): string {
   return kind === 'meaning' ? normalizeMeaning(value) : value;
 }
 
+/** One card's answer for one kind, with the keys the distractor rules compare. */
+interface Answer {
+  cardId: string;
+  value: string;
+  choiceKey: string;
+  meaningKey: string;
+  /**
+   * What similarity is measured on: the answer itself, or for meaning
+   * questions (whose choices are English) the card's Arabic headline.
+   */
+  shapeText: string;
+}
+
+function answerFor(card: Card, kind: QuizKind): Answer | null {
+  const value = correctAnswerFor(card, kind);
+  if (value === null) {
+    return null;
+  }
+  return {
+    cardId: card.id,
+    value,
+    choiceKey: choiceKey(value, kind),
+    meaningKey: normalizeMeaning(card.meaning),
+    shapeText: kind === 'meaning' ? cardHeadline(card) : value,
+  };
+}
+
+/** Every card's answer per kind, in collection order, worked out once per build. */
+function answersByKind(
+  cards: readonly Card[],
+  kinds: readonly QuizKind[],
+): Map<QuizKind, Answer[]> {
+  const byKind = new Map<QuizKind, Answer[]>();
+  for (const kind of kinds) {
+    const answers: Answer[] = [];
+    for (const card of cards) {
+      const answer = answerFor(card, kind);
+      if (answer !== null) {
+        answers.push(answer);
+      }
+    }
+    byKind.set(kind, answers);
+  }
+  return byKind;
+}
+
 /**
- * Distractors closest to the correct answer, so options feel plausible. Form
- * kinds compare answer to answer; meaning choices are English, so those rank
- * by how confusable the source words' Arabic headlines are instead. Words
+ * Whether another card's answer may be offered as a wrong option. Words
  * sharing the prompt's English translation are skipped: their answer is just
  * as right as the correct one, whichever form the question asks for.
  */
-function rankedDistractors(
+function isDistractor(candidate: Answer, prompt: Answer): boolean {
+  return (
+    candidate.cardId !== prompt.cardId &&
+    candidate.meaningKey !== prompt.meaningKey &&
+    candidate.choiceKey !== prompt.choiceKey
+  );
+}
+
+/** What the questions of one build share. */
+interface QuizContext {
+  answers: ReadonlyMap<QuizKind, readonly Answer[]>;
+  shapes: ShapeCache;
+  kinds: readonly QuizKind[];
+  rng: () => number;
+}
+
+function quizContext(
   cards: readonly Card[],
-  card: Card,
-  kind: QuizKind,
-  correct: string,
+  kinds: readonly QuizKind[],
   rng: () => number,
-): string[] {
-  const target = kind === 'meaning' ? cardHeadline(card) : correct;
-  const promptMeaning = normalizeMeaning(card.meaning);
-  const correctKey = choiceKey(correct, kind);
+): QuizContext {
+  return { answers: answersByKind(cards, kinds), shapes: new Map(), kinds, rng };
+}
+
+/**
+ * Distractors closest to the correct answer, so options feel plausible. Form
+ * kinds compare answer to answer; meaning choices are English, so those rank
+ * by how confusable the source words' Arabic headlines are instead.
+ */
+function rankedDistractors(context: QuizContext, kind: QuizKind, prompt: Answer): string[] {
+  const target = shapeOf(context.shapes, prompt.shapeText);
   const bestByKey = new Map<string, { value: string; score: number }>();
-  for (const other of cards) {
-    if (other.id === card.id || normalizeMeaning(other.meaning) === promptMeaning) {
+  for (const candidate of context.answers.get(kind) ?? []) {
+    if (!isDistractor(candidate, prompt)) {
       continue;
     }
-    const value = correctAnswerFor(other, kind);
-    if (value === null) {
-      continue;
-    }
-    const key = choiceKey(value, kind);
-    if (key === correctKey) {
-      continue;
-    }
-    const score = similarityScore(target, kind === 'meaning' ? cardHeadline(other) : value);
-    const existing = bestByKey.get(key);
+    const score = similarityScore(target, shapeOf(context.shapes, candidate.shapeText));
+    const existing = bestByKey.get(candidate.choiceKey);
     if (existing === undefined || score < existing.score) {
-      bestByKey.set(key, { value, score });
+      bestByKey.set(candidate.choiceKey, { value: candidate.value, score });
     }
   }
-  const ranked = shuffleWith([...bestByKey.values()], rng)
+  const ranked = shuffleWith([...bestByKey.values()], context.rng)
     .sort((a, b) => a.score - b.score)
     .slice(0, RANKED_POOL)
     .map((entry) => entry.value);
-  return shuffleWith(ranked, rng).slice(0, PREFERRED_DISTRACTORS);
+  return shuffleWith(ranked, context.rng).slice(0, PREFERRED_DISTRACTORS);
 }
 
-function buildQuestion(
-  cards: readonly Card[],
-  card: Card,
-  kinds: readonly QuizKind[],
-  rng: () => number,
-): QuizQuestion | null {
-  for (const kind of shuffleWith(kinds, rng)) {
-    const correct = correctAnswerFor(card, kind);
-    if (correct === null) {
+function buildQuestion(context: QuizContext, card: Card): QuizQuestion | null {
+  for (const kind of shuffleWith(context.kinds, context.rng)) {
+    const prompt = answerFor(card, kind);
+    if (prompt === null) {
       continue;
     }
-    const distractors = rankedDistractors(cards, card, kind, correct, rng);
+    const distractors = rankedDistractors(context, kind, prompt);
     if (distractors.length === 0) {
       continue;
     }
-    const choices = shuffleWith([correct, ...distractors], rng);
+    const choices = shuffleWith([prompt.value, ...distractors], context.rng);
     return {
       cardId: card.id,
       kind,
@@ -216,7 +300,7 @@ function buildQuestion(
       promptMeaning: card.meaning,
       instruction: INSTRUCTIONS[kind],
       choices,
-      correctIndex: choices.indexOf(correct),
+      correctIndex: choices.indexOf(prompt.value),
     };
   }
   return null;
@@ -268,18 +352,83 @@ export function buildQuiz(
   if (count <= 0 || kinds.length === 0) {
     return [];
   }
+  const context = quizContext(cards, kinds, rng);
   const picked: { question: QuizQuestion; learned: number }[] = [];
   for (const card of weightedOrder(quizPool(cards), rng)) {
     if (picked.length >= count) {
       break;
     }
-    const question = buildQuestion(cards, card, kinds, rng);
+    const question = buildQuestion(context, card);
     if (question !== null) {
       picked.push({ question, learned: learnedness(card.srs) });
     }
   }
   // Stable, so equally learned words keep the order they were drawn in.
   return picked.sort((a, b) => a.learned - b.learned).map((entry) => entry.question);
+}
+
+/**
+ * How many questions an uncapped buildQuiz would yield, found without ranking
+ * any distractors: a studied card counts once some kind has an answer for it
+ * and another card offers a different option. Ranking is the slow part of a
+ * build, and a count does not need it.
+ */
+export function countQuizQuestions(cards: readonly Card[], kinds: readonly QuizKind[]): number {
+  if (kinds.length === 0) {
+    return 0;
+  }
+  const answers = answersByKind(cards, kinds);
+  return quizPool(cards).filter((card) =>
+    kinds.some((kind) => {
+      const prompt = answerFor(card, kind);
+      return (
+        prompt !== null &&
+        (answers.get(kind) ?? []).some((candidate) => isDistractor(candidate, prompt))
+      );
+    }),
+  ).length;
+}
+
+/**
+ * One lap of an endless quiz: every studied card once, drawn by weight and
+ * then least learned first, the order an uncapped buildQuiz asks them in.
+ */
+function lapOrder(cards: readonly Card[], rng: () => number): string[] {
+  return weightedOrder(quizPool(cards), rng)
+    .map((card) => ({ id: card.id, learned: learnedness(card.srs) }))
+    .sort((a, b) => a.learned - b.learned)
+    .map((entry) => entry.id);
+}
+
+/**
+ * The next question of an endless quiz, built only when it is needed, since
+ * building a whole lap up front ranks distractors for every studied card.
+ * `lap` holds the card ids still to ask; once it runs dry a fresh lap is drawn
+ * from `cards`, so levels changed along the way set the next lap's order.
+ * Null only when no studied card can be asked about at all.
+ */
+export function nextEndlessQuestion(
+  cards: readonly Card[],
+  lap: readonly string[],
+  kinds: readonly QuizKind[],
+  rng: () => number,
+): { question: QuizQuestion; lap: string[] } | null {
+  if (kinds.length === 0) {
+    return null;
+  }
+  const byId = new Map(cards.map((card) => [card.id, card]));
+  const context = quizContext(cards, kinds, rng);
+  const askFrom = (ids: readonly string[]) => {
+    for (let index = 0; index < ids.length; index += 1) {
+      const card = byId.get(ids[index]);
+      const question = card === undefined ? null : buildQuestion(context, card);
+      if (question !== null) {
+        return { question, lap: ids.slice(index + 1) };
+      }
+    }
+    return null;
+  };
+  return askFrom(lap) ?? askFrom(lapOrder(cards, rng));
 }
 
 /**

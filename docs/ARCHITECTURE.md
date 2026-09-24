@@ -139,6 +139,13 @@ export function buildQuiz(
   cards: Card[],
   options: { count: number; kinds: QuizKind[]; rng: () => number },
 ): QuizQuestion[];
+export function countQuizQuestions(cards: readonly Card[], kinds: readonly QuizKind[]): number;
+export function nextEndlessQuestion(
+  cards: readonly Card[],
+  lap: readonly string[],
+  kinds: readonly QuizKind[],
+  rng: () => number,
+): { question: QuizQuestion; lap: string[] } | null;
 export function answerQuizQuestion(
   cards: readonly Card[],
   cardId: string,
@@ -165,6 +172,15 @@ collection, never-studied cards included. Choice order shuffled with rng; no dup
 in one quiz; if fewer eligible cards than `count`, return as many as possible. Deterministic
 given the same rng. `answerQuizQuestion` applies a quiz answer exactly like a flashcard
 answer (`reviewCard` with `got_it` / `not_yet`), so quiz results move the SRS level.
+
+Cost: ranking distractors compares each question's answer against every card, so a build
+is roughly (questions x collection) similarity scores. Per build, each card's answer per
+kind and each text's normalized / skeleton form are worked out once, not per pair.
+`countQuizQuestions` returns exactly the length an uncapped `buildQuiz` would, but only
+checks that some distractor exists, so the setup screen can call it on every render.
+`nextEndlessQuestion` builds one endless question at a time from `lap` (card ids still to
+ask this lap), drawing a fresh lap from `cards` (weighted order, then least learned
+first) when the given one has nothing askable left; null only when nothing is askable.
 
 ### src/domain/scan-review.ts (to implement)
 
@@ -578,9 +594,10 @@ exit. Setup blocks with a "study first" message while fewer than `MIN_QUIZ_QUEST
 in the selection have ever been studied.
 
 The endless count option (`count: 'infinite'` in `QuizConfig`, serialized as `infinite`)
-runs in laps: each `buildQuiz` call yields at most one question per studied card, so the
-runner asks for the whole eligible pool and appends a fresh lap, rebuilt from its updated
-deck, whenever the queue runs out. The header shows "Question N" plus a Finish button
+runs in laps of one question per studied card. The runner builds only the next question
+(`nextEndlessQuestion`) as the current one advances, keeping the rest of the lap as card
+ids; a new lap is drawn from its updated deck when one runs out. Building a whole lap up
+front took over a second on a few hundred cards and froze the screen at every lap change. The header shows "Question N" plus a Finish button
 instead of "N of M" and the progress bar; Finish scores only the answered questions, so an
 unanswered current question never counts as wrong.
 
