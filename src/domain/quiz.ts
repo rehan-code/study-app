@@ -1,7 +1,14 @@
 import { cardHeadline, withCardSrs, type Card } from '@/domain/cards';
 import { isNew, learnedness, reviewCard, type SrsState } from '@/domain/srs';
 
-export const QUIZ_KINDS = ['present', 'imperative', 'masdar', 'meaning', 'plural'] as const;
+export const QUIZ_KINDS = [
+  'present',
+  'imperative',
+  'masdar',
+  'meaning',
+  'arabic',
+  'plural',
+] as const;
 export type QuizKind = (typeof QUIZ_KINDS)[number];
 
 export interface QuizQuestion {
@@ -12,6 +19,16 @@ export interface QuizQuestion {
   instruction: string;
   choices: string[];
   correctIndex: number;
+}
+
+/** Meaning questions answer in English; every other kind answers in Arabic. */
+export function choicesAreArabic(kind: QuizKind): boolean {
+  return kind !== 'meaning';
+}
+
+/** Arabic-word questions prompt with the English meaning, so the Arabic stays hidden. */
+export function promptIsArabic(kind: QuizKind): boolean {
+  return kind !== 'arabic';
 }
 
 const VERB_FIELD_BY_KIND = {
@@ -25,6 +42,7 @@ const INSTRUCTIONS: Record<QuizKind, string> = {
   imperative: 'Pick the command form (الأمر)',
   masdar: 'Pick the verbal noun (المصدر)',
   meaning: 'Pick the meaning',
+  arabic: 'Pick the Arabic word',
   plural: 'Pick the plural (الجمع)',
 };
 
@@ -128,6 +146,14 @@ function correctAnswerFor(card: Card, kind: QuizKind): string | null {
     const meaning = card.meaning.trim();
     return meaning.length > 0 ? meaning : null;
   }
+  if (kind === 'arabic') {
+    // The meaning is the prompt, so a card without one has nothing to ask.
+    if (card.meaning.trim().length === 0) {
+      return null;
+    }
+    const headline = cardHeadline(card);
+    return headline.trim().length > 0 ? headline : null;
+  }
   if (kind === 'plural') {
     if (card.type !== 'vocab') {
       return null;
@@ -152,8 +178,8 @@ function choiceKey(value: string, kind: QuizKind): string {
 
 /**
  * Distractors closest to the correct answer, so options feel plausible. Form
- * kinds compare answer to answer; meaning choices are English, so those rank
- * by how confusable the source words' Arabic headlines are instead. Words
+ * and Arabic-word kinds compare answer to answer; meaning choices are English,
+ * so those rank by how confusable the source words' Arabic headlines are. Words
  * sharing the prompt's English translation are skipped: their answer is just
  * as right as the correct one, whichever form the question asks for.
  */

@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { ArabicText } from '@/components/arabic-text';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
-import type { QuizQuestion } from '@/domain/quiz';
+import { choicesAreArabic, promptIsArabic, type QuizQuestion } from '@/domain/quiz';
 
 import { ChoiceButton, type ChoiceState } from '@/features/quiz/choice-button';
 
@@ -27,7 +27,10 @@ function choiceState(question: QuizQuestion, picked: number | null, index: numbe
 }
 
 export function QuestionView({ question, picked, onPick }: QuestionViewProps) {
-  const showMeaningHint = question.kind !== 'meaning' && question.promptMeaning.trim().length > 0;
+  const arabicPrompt = promptIsArabic(question.kind);
+  const arabicChoices = choicesAreArabic(question.kind);
+  // The meaning is a hint only when it is neither the prompt nor the answer.
+  const showMeaningHint = arabicPrompt && arabicChoices && question.promptMeaning.trim().length > 0;
 
   return (
     <View style={styles.container}>
@@ -35,9 +38,15 @@ export function QuestionView({ question, picked, onPick }: QuestionViewProps) {
         <ThemedText themeColor="textSecondary" style={styles.centered}>
           {question.instruction}
         </ThemedText>
-        <ArabicText variant="headline" align="center">
-          {question.promptArabic}
-        </ArabicText>
+        {arabicPrompt ? (
+          <ArabicText variant="headline" align="center">
+            {question.promptArabic}
+          </ArabicText>
+        ) : (
+          <ThemedText type="subtitle" style={styles.centered}>
+            {question.promptMeaning}
+          </ThemedText>
+        )}
         {showMeaningHint && (
           <ThemedText type="small" themeColor="textSecondary" style={styles.centered}>
             {question.promptMeaning}
@@ -49,7 +58,7 @@ export function QuestionView({ question, picked, onPick }: QuestionViewProps) {
           <ChoiceButton
             key={choice}
             text={choice}
-            arabic={question.kind !== 'meaning'}
+            arabic={arabicChoices}
             state={choiceState(question, picked, index)}
             locked={picked !== null}
             onPress={() => onPick(index)}

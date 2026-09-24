@@ -30,6 +30,7 @@ export const QUIZ_KIND_OPTIONS: readonly QuizKindOption[] = [
   { kind: 'imperative', label: 'Command الأمر', verbOnly: true },
   { kind: 'masdar', label: 'Verbal noun المصدر', verbOnly: true },
   { kind: 'meaning', label: 'Meaning', verbOnly: false },
+  { kind: 'arabic', label: 'Arabic word', verbOnly: false },
   { kind: 'plural', label: 'Plural الجمع', verbOnly: false },
 ];
 
@@ -83,7 +84,7 @@ export function startBlockedReason(
   }
   if (eligible < MIN_QUIZ_QUESTIONS) {
     if (kinds.every((kind) => VERB_ONLY_KINDS.has(kind))) {
-      return 'These question types need verb cards. Turn on Meaning or Plural, or study some verbs first.';
+      return 'These question types need verb cards. Turn on Meaning, Arabic word or Plural, or study some verbs first.';
     }
     return 'Not enough studied words for these question types. Study a few more, or turn on another type.';
   }

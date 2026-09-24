@@ -7,7 +7,7 @@ import { Surface } from '@/components/surface';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing, type ThemeColor } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import type { QuizQuestion } from '@/domain/quiz';
+import { choicesAreArabic, promptIsArabic, type QuizQuestion } from '@/domain/quiz';
 
 import { scoreQuiz, scoreTier } from '@/features/quiz/quiz-results';
 
@@ -49,14 +49,16 @@ function ResultRow({
 }) {
   const theme = useTheme();
   const correct = answer === question.correctIndex;
-  const arabicAnswers = question.kind !== 'meaning';
+  const arabicPrompt = promptIsArabic(question.kind);
+  const arabicAnswers = choicesAreArabic(question.kind);
+  const promptText = arabicPrompt ? question.promptArabic : question.promptMeaning;
   const yourAnswer = answer === undefined ? null : question.choices[answer];
   const correctAnswer = question.choices[question.correctIndex];
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${question.promptArabic}, open card`}
+      accessibilityLabel={`${promptText}, open card`}
       onPress={onPress}
       style={({ pressed }) => [
         styles.row,
@@ -71,12 +73,16 @@ function ResultRow({
         name={correct ? 'checkmark.circle.fill' : 'xmark.circle.fill'}
         size={22}
         tintColor={correct ? theme.success : theme.danger}
-        style={styles.rowIcon}
+        style={arabicPrompt ? styles.rowIconArabic : styles.rowIcon}
       />
       <View style={styles.rowContent}>
-        <ArabicText variant="compact" numberOfLines={1}>
-          {question.promptArabic}
-        </ArabicText>
+        {arabicPrompt ? (
+          <ArabicText variant="compact" numberOfLines={1}>
+            {question.promptArabic}
+          </ArabicText>
+        ) : (
+          <ThemedText numberOfLines={1}>{question.promptMeaning}</ThemedText>
+        )}
         {correct ? (
           <AnswerText value={correctAnswer} arabic={arabicAnswers} tone="success" />
         ) : (
@@ -103,7 +109,7 @@ function ResultRow({
         size={14}
         weight="semibold"
         tintColor={theme.textSecondary}
-        style={styles.rowChevron}
+        style={arabicPrompt ? styles.rowChevronArabic : styles.rowChevron}
       />
     </Pressable>
   );
@@ -193,11 +199,18 @@ const styles = StyleSheet.create({
     padding: Spacing.three,
     alignItems: 'flex-start',
   },
+  // The icons center on the first line of the prompt; Arabic lines are taller,
+  // so their icons start lower.
   rowIcon: {
-    // Centers the icon on the first Arabic line, whose tall line height starts lower.
+    marginTop: 1,
+  },
+  rowIconArabic: {
     marginTop: 6,
   },
   rowChevron: {
+    marginTop: 5,
+  },
+  rowChevronArabic: {
     marginTop: 10,
   },
   rowContent: {
