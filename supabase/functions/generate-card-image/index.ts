@@ -28,7 +28,7 @@ const CHECK_TIMEOUT_MS = 60_000;
 const SCENE_TIMEOUT_MS = 30_000;
 // Each attempt is a couple of seconds of scene writing, a second of fal.ai and
 // a couple of seconds of checking, so four rounds stay well inside the wall
-// clock. Four rather than three because FLUX slips on faces as well as
+// clock. Four rather than three because FLUX slips on eyes as well as
 // lettering, and a card left without a picture is the cost of running out.
 const MAX_ATTEMPTS = 4;
 const CHECK_TOOL_NAME = 'report_image_problems';
@@ -52,7 +52,7 @@ const falResponseSchema = z.object({
 
 const checkResultSchema = z.object({
   hasWriting: z.boolean(),
-  hasFacialFeatures: z.boolean(),
+  hasDetailedEyes: z.boolean(),
   hasUncoveredFemale: z.boolean(),
   note: z.string(),
 });
@@ -226,6 +226,14 @@ function fallbackScene(card: CardRecord): string {
   return `a clear everyday moment showing ${card.meaning.trim()}`;
 }
 
+/**
+ * FLUX nearly always puts at least a dot for eyes on a face, however firmly
+ * the prompt asks for blank ones, and a retry cannot change that: the note
+ * goes to the scene writer, which never mentions faces anyway. Rejecting any
+ * mark on a face therefore threw away every picture with a person in it, so
+ * only detailed eyes break the rule, and doubt about eyes resolves to keeping
+ * the picture.
+ */
 const CHECK_INSTRUCTION = [
   'Check this flashcard illustration against three rules.',
   '',
@@ -235,36 +243,38 @@ const CHECK_INSTRUCTION = [
   'writing without spelling anything. Marks that clearly are not writing (a plain line, a row',
   'of dots, a stripe, a geometric pattern) do not count.',
   '',
-  '2. hasFacialFeatures: any person has anything drawn on the face. Every face must be',
-  'completely blank. Eyes of any kind (dots, circles, closed-eye curves), eyebrows, a nose, a',
-  'mouth, teeth or cheek blush all count. Hair, beards, head coverings and the outline of the',
-  'head do not.',
+  '2. hasDetailedEyes: any person has detailed eyes. Simple eyes are fine: a plain dot, a',
+  'small solid oval, or a single short line or curve for a closed eye. Detailed eyes are',
+  'anything more: a white eye with an iris or pupil inside it, eyelashes, highlights or',
+  'sparkles, or outlined, almond-shaped or cartoon-style eyes. Only the eyes matter here:',
+  'eyebrows, a nose, a mouth or cheek blush do not break this rule.',
   '',
   '3. hasUncoveredFemale: any woman or girl shows her hair. Every female character must wear',
   'a hijab or headscarf that covers all of her hair. Judge by the whole figure (dress, long',
   'hair, earrings, hair ties), not only the face.',
   '',
-  'When you are unsure whether something breaks a rule, answer that it does.',
+  'When you are unsure whether there is writing or an uncovered woman, answer that there is.',
+  'When you are unsure whether eyes are detailed or simple, answer that they are simple.',
   '',
   `Call ${CHECK_TOOL_NAME} exactly once. Keep "note" to a few words naming each problem and`,
-  'where it is (e.g. "eyes on the boy; woman at left without headscarf"), or "none" when the',
-  'picture is clean.',
+  'where it is (e.g. "detailed eyes on the boy; woman at left without headscarf"), or "none"',
+  'when the picture is clean.',
 ].join('\n');
 
 const CHECK_TOOL_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['hasWriting', 'hasFacialFeatures', 'hasUncoveredFemale', 'note'],
+  required: ['hasWriting', 'hasDetailedEyes', 'hasUncoveredFemale', 'note'],
   properties: {
     hasWriting: { type: 'boolean' },
-    hasFacialFeatures: { type: 'boolean' },
+    hasDetailedEyes: { type: 'boolean' },
     hasUncoveredFemale: { type: 'boolean' },
     note: { type: 'string' },
   },
 } as const;
 
 function breaksARule(check: CheckResult): boolean {
-  return check.hasWriting || check.hasFacialFeatures || check.hasUncoveredFemale;
+  return check.hasWriting || check.hasDetailedEyes || check.hasUncoveredFemale;
 }
 
 function mapFalError(status: number): HttpError {
@@ -435,8 +445,8 @@ async function writeScene(
 }
 
 /**
- * Asks Claude whether the picture breaks any card-image rule (writing, faces,
- * an uncovered woman). Returns null when the check could not run: the caller
+ * Asks Claude whether the picture breaks any card-image rule (writing,
+ * detailed eyes, an uncovered woman). Returns null when the check could not run: the caller
  * then keeps the image rather than leaving the card blank, because an
  * unverified picture from the current prompt is still the normal case, not a
  * failure.
@@ -476,8 +486,8 @@ async function checkImage(image: GeneratedImage): Promise<CheckResult | null> {
 }
 
 /**
- * Generates until the picture passes the check. FLUX adds lettering and facial
- * features often enough that the prompt alone cannot guarantee a clean image,
+ * Generates until the picture passes the check. FLUX adds lettering and
+ * detailed eyes often enough that the prompt alone cannot guarantee a clean image,
  * so every attempt is checked and a failing one is thrown away. Each retry asks
  * for a fresh scene and tells the scene writer what went wrong last time, so
  * the next picture drops the object that carried lettering or swaps a woman
