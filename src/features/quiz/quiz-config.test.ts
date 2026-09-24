@@ -116,6 +116,14 @@ describe('toggleQuizKind', () => {
     const afterImperative = toggleQuizKind(afterMeaning, 'imperative');
     expect(afterImperative).toEqual(['imperative', 'meaning']);
   });
+
+  it('slots the arabic-word kind between meaning and plural', () => {
+    expect(toggleQuizKind(['meaning', 'plural'], 'arabic')).toEqual([
+      'meaning',
+      'arabic',
+      'plural',
+    ]);
+  });
 });
 
 describe('countEligibleQuestions', () => {
@@ -142,6 +150,17 @@ describe('countEligibleQuestions', () => {
   it('counts non-verb cards for meaning questions', () => {
     const cards = [vocabCard('n-bab', 'بَاب', 'Door'), vocabCard('n-bayt', 'بَيْت', 'House')];
     expect(countEligibleQuestions(cards, ['meaning'])).toBe(2);
+  });
+
+  it('counts any card with a meaning for arabic-word questions', () => {
+    const cards = [vocabCard('n-bab', 'بَاب', 'Door'), vocabCard('n-bayt', 'بَيْت', 'House')];
+    expect(countEligibleQuestions(cards, ['arabic'])).toBe(2);
+    expect(countEligibleQuestions([ittasala, nazara, bahatha], ['arabic'])).toBe(3);
+  });
+
+  it('skips cards without a meaning for arabic-word questions', () => {
+    const cards = [vocabCard('n-bab', 'بَاب', ''), vocabCard('n-bayt', 'بَيْت', 'House')];
+    expect(countEligibleQuestions(cards, ['arabic'])).toBe(0);
   });
 
   it('is deterministic across calls', () => {
@@ -188,15 +207,16 @@ describe('startBlockedReason', () => {
   });
 
   it('suggests any-card questions when only verb kinds are on', () => {
-    expect(startBlockedReason(1, ['present'], 5, 5)).toMatch(/meaning or plural/i);
+    expect(startBlockedReason(1, ['present'], 5, 5)).toMatch(/meaning, arabic word or plural/i);
     expect(startBlockedReason(1, ['present', 'imperative', 'masdar'], 5, 5)).toMatch(
-      /meaning or plural/i,
+      /meaning, arabic word or plural/i,
     );
   });
 
   it('asks for more studied words when an any-card kind is already on', () => {
     expect(startBlockedReason(1, ['present', 'meaning'], 3, 2)).toMatch(/studied words/i);
     expect(startBlockedReason(1, ['plural'], 3, 2)).toMatch(/studied words/i);
+    expect(startBlockedReason(1, ['arabic'], 3, 2)).toMatch(/studied words/i);
   });
 
   it('returns null when enough questions are available', () => {
@@ -215,6 +235,12 @@ describe('serializeQuizParams / parseQuizParams', () => {
     const params = serializeQuizParams({ count: 'infinite', kinds: ['meaning'] });
     expect(params).toEqual({ count: 'infinite', kinds: 'meaning' });
     expect(parseQuizParams(params)).toEqual({ count: 'infinite', kinds: ['meaning'] });
+  });
+
+  it('round-trips the arabic-word kind', () => {
+    const params = serializeQuizParams({ count: 5, kinds: ['arabic', 'meaning'] });
+    expect(params).toEqual({ count: '5', kinds: 'arabic,meaning' });
+    expect(parseQuizParams(params)).toEqual({ count: 5, kinds: ['arabic', 'meaning'] });
   });
 
   it('accepts array-shaped route params by taking the first value', () => {
